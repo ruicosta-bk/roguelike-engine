@@ -329,6 +329,9 @@ bool Engine::useOrEquipItem(size_t index) {
         m_player.hp = std::min(m_player.maxHp, m_player.hp + item.healAmount);
         addMessage("You drank " + item.name + " (+" + std::to_string(item.healAmount) + " HP)!");
         m_inventory.erase(m_inventory.begin() + index);
+        if (m_inventorySelectedIndex >= m_inventory.size() && !m_inventory.empty()) {
+            m_inventorySelectedIndex = m_inventory.size() - 1;
+        }
         return true;
     }
 
@@ -359,6 +362,9 @@ bool Engine::useOrEquipItem(size_t index) {
             addMessage("You read " + item.name + " and teleported away!");
         }
         m_inventory.erase(m_inventory.begin() + index);
+        if (m_inventorySelectedIndex >= m_inventory.size() && !m_inventory.empty()) {
+            m_inventorySelectedIndex = m_inventory.size() - 1;
+        }
         return true;
     }
 
@@ -375,8 +381,87 @@ bool Engine::dropItem(size_t index) {
     item.pos = m_player.pos;
     m_items.push_back(item);
     m_inventory.erase(m_inventory.begin() + index);
+    if (m_inventorySelectedIndex >= m_inventory.size() && !m_inventory.empty()) {
+        m_inventorySelectedIndex = m_inventory.size() - 1;
+    }
     addMessage("Dropped " + item.name + " on the floor.");
     return true;
+}
+
+void Engine::setInventorySelectedIndex(size_t idx) {
+    if (m_inventory.empty()) {
+        m_inventorySelectedIndex = 0;
+    } else {
+        m_inventorySelectedIndex = std::min(idx, m_inventory.size() - 1);
+    }
+}
+
+void Engine::selectPrevInventoryItem() {
+    if (m_inventory.empty()) return;
+    if (m_inventorySelectedIndex > 0) {
+        m_inventorySelectedIndex--;
+    } else {
+        m_inventorySelectedIndex = m_inventory.size() - 1;
+    }
+}
+
+void Engine::selectNextInventoryItem() {
+    if (m_inventory.empty()) return;
+    if (m_inventorySelectedIndex + 1 < m_inventory.size()) {
+        m_inventorySelectedIndex++;
+    } else {
+        m_inventorySelectedIndex = 0;
+    }
+}
+
+bool Engine::useOrEquipSelectedItem() {
+    if (m_inventory.empty()) return false;
+    if (m_inventorySelectedIndex >= m_inventory.size()) {
+        m_inventorySelectedIndex = m_inventory.size() - 1;
+    }
+    bool res = useOrEquipItem(m_inventorySelectedIndex);
+    if (m_inventorySelectedIndex >= m_inventory.size() && !m_inventory.empty()) {
+        m_inventorySelectedIndex = m_inventory.size() - 1;
+    }
+    return res;
+}
+
+bool Engine::dropSelectedItem() {
+    if (m_inventory.empty()) return false;
+    if (m_inventorySelectedIndex >= m_inventory.size()) {
+        m_inventorySelectedIndex = m_inventory.size() - 1;
+    }
+    return dropItem(m_inventorySelectedIndex);
+}
+
+void Engine::handleInventoryClick(int mouseX, int mouseY, bool rightClick) {
+    if (!m_inventoryOpen || m_inventory.empty()) return;
+
+    const int modalW = 560;
+    const int modalX = (1120 - modalW) / 2;
+    const int modalY = 20;
+    const int itemStartY = modalY + 45;
+    const int rowH = 24;
+
+    int count = static_cast<int>(m_inventory.size());
+    int itemEndY = itemStartY + count * rowH;
+
+    if (mouseX >= modalX + 15 && mouseX <= modalX + modalW - 15) {
+        if (mouseY >= itemStartY && mouseY < itemEndY) {
+            size_t clicked = static_cast<size_t>((mouseY - itemStartY) / rowH);
+            if (clicked < m_inventory.size()) {
+                m_inventorySelectedIndex = clicked;
+                if (rightClick) {
+                    dropItem(clicked);
+                } else {
+                    useOrEquipItem(clicked);
+                }
+                if (m_inventorySelectedIndex >= m_inventory.size() && !m_inventory.empty()) {
+                    m_inventorySelectedIndex = m_inventory.size() - 1;
+                }
+            }
+        }
+    }
 }
 
 void Engine::attackEntity(Entity& attacker, Entity& defender) {
@@ -692,7 +777,7 @@ std::string Engine::renderToString() const {
     } else if (m_victory) {
         out += " \033[1;32m*** VICTORY! Dungeon Cleared! Press [R] to Restart, [Q] to Quit ***\033[0m\033[K\n";
     } else if (m_inventoryOpen) {
-        out += " \033[1;33m*** INVENTORY OPEN *** [1-9] Use/Equip | [Shift+1-9] Drop | [I] Close\033[0m\033[K\n";
+        out += " \033[1;33m*** INVENTORY OPEN *** [W/S] Select | [Enter/Space] Use | [D] Drop | [I] Close\033[0m\033[K\n";
     } else {
         out += " \033[90mControls: [WASD] Move | [I] Inventory | [.] Rest | [>] Stairs | [R] Restart | [Q] Quit\033[0m\033[K\n";
     }
@@ -703,6 +788,8 @@ std::string Engine::renderToString() const {
         for (size_t i = 0; i < 5; ++i) {
             if (i < m_inventory.size()) {
                 const auto& item = m_inventory[i];
+                bool isSelected = (i == m_inventorySelectedIndex);
+                std::string prefix = isSelected ? " > " : "   ";
                 std::string tag = item.equipped ? " \033[1;32m[EQUIPPED]\033[0m" : "";
                 std::string bonus = "";
                 if (item.category == ItemCategory::Weapon) bonus = " (+ " + std::to_string(item.atkBonus) + " Atk)";
@@ -710,7 +797,8 @@ std::string Engine::renderToString() const {
                 else if (item.category == ItemCategory::Potion) bonus = " (Heal " + std::to_string(item.healAmount) + " HP)";
                 else if (item.category == ItemCategory::Scroll) bonus = " (Teleport)";
 
-                out += " [" + std::to_string(i + 1) + "] " + item.name + bonus + tag + "\033[K\n";
+                std::string col = isSelected ? "\033[1;37m" : "\033[0;37m";
+                out += prefix + col + "[" + std::to_string(i + 1) + "] " + item.name + bonus + tag + "\033[0m\033[K\n";
             } else {
                 out += "\033[K\n";
             }
@@ -770,8 +858,29 @@ void Engine::handleKey(int ch) {
     if (m_inventoryOpen) {
         if (ch == 'i' || ch == 'I' || ch == 27) {
             m_inventoryOpen = false;
+        } else if (ch == 'w' || ch == 'W' || ch == 'k' || ch == 'K') {
+            selectPrevInventoryItem();
+        } else if (ch == 's' || ch == 'S' || ch == 'j' || ch == 'J') {
+            selectNextInventoryItem();
+        } else if (ch == 13 || ch == ' ') {
+            useOrEquipSelectedItem();
+        } else if (ch == 'd' || ch == 'D') {
+            dropSelectedItem();
         } else if (ch >= '1' && ch <= '9') {
-            useOrEquipItem(static_cast<size_t>(ch - '1'));
+            size_t idx = static_cast<size_t>(ch - '1');
+            setInventorySelectedIndex(idx);
+            useOrEquipItem(idx);
+        } else if (ch == '0') {
+            setInventorySelectedIndex(9);
+            useOrEquipItem(9);
+        } else if (ch >= 'a' && ch <= 'j') {
+            size_t idx = static_cast<size_t>(ch - 'a');
+            setInventorySelectedIndex(idx);
+            useOrEquipItem(idx);
+        } else if (ch >= 'A' && ch <= 'J') {
+            size_t idx = static_cast<size_t>(ch - 'A');
+            setInventorySelectedIndex(idx);
+            useOrEquipItem(idx);
         } else if (ch == '!') {
             dropItem(0);
         } else if (ch == '@') {
@@ -782,6 +891,16 @@ void Engine::handleKey(int ch) {
             dropItem(3);
         } else if (ch == '%') {
             dropItem(4);
+        } else if (ch == '^') {
+            dropItem(5);
+        } else if (ch == '&') {
+            dropItem(6);
+        } else if (ch == '*') {
+            dropItem(7);
+        } else if (ch == '(') {
+            dropItem(8);
+        } else if (ch == ')') {
+            dropItem(9);
         }
         return;
     }
@@ -838,6 +957,11 @@ void Engine::handleKey(int ch) {
 
 void Engine::handleSpecialKey(int code) {
     if (m_inventoryOpen) {
+        if (code == 72) { // Up
+            selectPrevInventoryItem();
+        } else if (code == 80) { // Down
+            selectNextInventoryItem();
+        }
         return;
     }
     switch (code) {
@@ -1064,6 +1188,28 @@ static LRESULT CALLBACK GuiWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             return 0;
         }
 
+        case WM_LBUTTONDOWN: {
+            if (engine && engine->isInventoryOpen()) {
+                int mouseX = LOWORD(lParam);
+                int mouseY = HIWORD(lParam);
+                engine->handleInventoryClick(mouseX, mouseY, false);
+                InvalidateRect(hwnd, NULL, FALSE);
+                return 0;
+            }
+            break;
+        }
+
+        case WM_RBUTTONDOWN: {
+            if (engine && engine->isInventoryOpen()) {
+                int mouseX = LOWORD(lParam);
+                int mouseY = HIWORD(lParam);
+                engine->handleInventoryClick(mouseX, mouseY, true);
+                InvalidateRect(hwnd, NULL, FALSE);
+                return 0;
+            }
+            break;
+        }
+
         case WM_KEYDOWN: {
             if (!engine) break;
             bool handled = false;
@@ -1072,9 +1218,62 @@ static LRESULT CALLBACK GuiWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                 if (wParam == VK_ESCAPE || wParam == 'I') {
                     engine->setInventoryOpen(false);
                     handled = true;
+                } else if (wParam == VK_UP || wParam == 'W') {
+                    engine->selectPrevInventoryItem();
+                    handled = true;
+                } else if (wParam == VK_DOWN || wParam == 'S') {
+                    engine->selectNextInventoryItem();
+                    handled = true;
+                } else if (wParam == VK_RETURN || wParam == VK_SPACE) {
+                    engine->useOrEquipSelectedItem();
+                    handled = true;
+                } else if (wParam == 'D' || wParam == VK_DELETE) {
+                    engine->dropSelectedItem();
+                    handled = true;
                 } else if (wParam >= '1' && wParam <= '9') {
                     size_t idx = static_cast<size_t>(wParam - '1');
                     bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+                    engine->setInventorySelectedIndex(idx);
+                    if (shift) {
+                        engine->dropItem(idx);
+                    } else {
+                        engine->useOrEquipItem(idx);
+                    }
+                    handled = true;
+                } else if (wParam == '0') {
+                    size_t idx = 9;
+                    bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+                    engine->setInventorySelectedIndex(idx);
+                    if (shift) {
+                        engine->dropItem(idx);
+                    } else {
+                        engine->useOrEquipItem(idx);
+                    }
+                    handled = true;
+                } else if (wParam >= VK_NUMPAD1 && wParam <= VK_NUMPAD9) {
+                    size_t idx = static_cast<size_t>(wParam - VK_NUMPAD1);
+                    bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+                    engine->setInventorySelectedIndex(idx);
+                    if (shift) {
+                        engine->dropItem(idx);
+                    } else {
+                        engine->useOrEquipItem(idx);
+                    }
+                    handled = true;
+                } else if (wParam == VK_NUMPAD0) {
+                    size_t idx = 9;
+                    bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+                    engine->setInventorySelectedIndex(idx);
+                    if (shift) {
+                        engine->dropItem(idx);
+                    } else {
+                        engine->useOrEquipItem(idx);
+                    }
+                    handled = true;
+                } else if (wParam >= 'A' && wParam <= 'J') {
+                    size_t idx = static_cast<size_t>(wParam - 'A');
+                    bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+                    engine->setInventorySelectedIndex(idx);
                     if (shift) {
                         engine->dropItem(idx);
                     } else {
@@ -1145,9 +1344,61 @@ static LRESULT CALLBACK GuiWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             bool handled = false;
 
             if (engine->isInventoryOpen()) {
-                if (wParam == 'i' || wParam == 'I') {
+                if (wParam == 'i' || wParam == 'I' || wParam == 27) {
                     engine->setInventoryOpen(false);
                     handled = true;
+                } else if (wParam == '\r' || wParam == ' ') {
+                    engine->useOrEquipSelectedItem();
+                    handled = true;
+                } else if (wParam == 'd' || wParam == 'D') {
+                    engine->dropSelectedItem();
+                    handled = true;
+                } else if (wParam == 'w' || wParam == 'W') {
+                    engine->selectPrevInventoryItem();
+                    handled = true;
+                } else if (wParam == 's' || wParam == 'S') {
+                    engine->selectNextInventoryItem();
+                    handled = true;
+                } else if (wParam >= '1' && wParam <= '9') {
+                    size_t idx = static_cast<size_t>(wParam - '1');
+                    engine->setInventorySelectedIndex(idx);
+                    engine->useOrEquipItem(idx);
+                    handled = true;
+                } else if (wParam == '0') {
+                    size_t idx = 9;
+                    engine->setInventorySelectedIndex(idx);
+                    engine->useOrEquipItem(idx);
+                    handled = true;
+                } else if (wParam >= 'a' && wParam <= 'j') {
+                    size_t idx = static_cast<size_t>(wParam - 'a');
+                    engine->setInventorySelectedIndex(idx);
+                    engine->useOrEquipItem(idx);
+                    handled = true;
+                } else if (wParam >= 'A' && wParam <= 'J') {
+                    size_t idx = static_cast<size_t>(wParam - 'A');
+                    engine->setInventorySelectedIndex(idx);
+                    engine->useOrEquipItem(idx);
+                    handled = true;
+                } else if (wParam == '!') {
+                    engine->dropItem(0); handled = true;
+                } else if (wParam == '@') {
+                    engine->dropItem(1); handled = true;
+                } else if (wParam == '#') {
+                    engine->dropItem(2); handled = true;
+                } else if (wParam == '$') {
+                    engine->dropItem(3); handled = true;
+                } else if (wParam == '%') {
+                    engine->dropItem(4); handled = true;
+                } else if (wParam == '^') {
+                    engine->dropItem(5); handled = true;
+                } else if (wParam == '&') {
+                    engine->dropItem(6); handled = true;
+                } else if (wParam == '*') {
+                    engine->dropItem(7); handled = true;
+                } else if (wParam == '(') {
+                    engine->dropItem(8); handled = true;
+                } else if (wParam == ')') {
+                    engine->dropItem(9); handled = true;
                 }
             } else {
                 if (wParam == '>') {
@@ -1589,12 +1840,14 @@ void Engine::renderGui(void* hdcVoid, int width, int height) {
     // 6. Inventory Modal (if open)
     if (m_inventoryOpen) {
         int modalW = 560;
-        int modalH = 320;
+        int modalH = 330;
         int modalX = (width - modalW) / 2;
         int modalY = 20;
 
         HBRUSH hbrModalBg = CreateSolidBrush(RGB(16, 18, 24));
         HPEN hpenModalBorder = CreatePen(PS_SOLID, 2, RGB(240, 200, 60)); // Gold border
+        HBRUSH hbrSelectedRow = CreateSolidBrush(RGB(30, 48, 80));         // Row highlight background
+        HPEN hpenSelectedBorder = CreatePen(PS_SOLID, 1, RGB(255, 215, 0)); // Highlight border
 
         HPEN oldP = static_cast<HPEN>(SelectObject(memDC, hpenModalBorder));
         HBRUSH oldB = static_cast<HBRUSH>(SelectObject(memDC, hbrModalBg));
@@ -1608,6 +1861,11 @@ void Engine::renderGui(void* hdcVoid, int width, int height) {
         RECT rTitle = { modalX, modalY + 12, modalX + modalW, modalY + 35 };
         DrawTextA(memDC, title.c_str(), static_cast<int>(title.size()), &rTitle, DT_CENTER | DT_SINGLELINE);
 
+        // Ensure selection is within bounds
+        if (m_inventorySelectedIndex >= m_inventory.size() && !m_inventory.empty()) {
+            const_cast<Engine*>(this)->m_inventorySelectedIndex = m_inventory.size() - 1;
+        }
+
         // Items list
         int itemY = modalY + 45;
         if (m_inventory.empty()) {
@@ -1618,7 +1876,16 @@ void Engine::renderGui(void* hdcVoid, int width, int height) {
         } else {
             for (size_t i = 0; i < m_inventory.size(); ++i) {
                 const auto& it = m_inventory[i];
-                std::string itemLine = "[" + std::to_string(i + 1) + "] " + it.name;
+                bool isSelected = (i == m_inventorySelectedIndex);
+
+                if (isSelected) {
+                    RECT rSel = { modalX + 15, itemY - 1, modalX + modalW - 15, itemY + 23 };
+                    FillRect(memDC, &rSel, hbrSelectedRow);
+                    FrameRect(memDC, &rSel, hbrGold);
+                }
+
+                std::string prefix = isSelected ? " > " : "   ";
+                std::string itemLine = prefix + "[" + std::to_string(i + 1) + "] " + it.name;
 
                 if (it.category == ItemCategory::Weapon) {
                     itemLine += "  (Atk +" + std::to_string(it.atkBonus) + ")";
@@ -1633,23 +1900,27 @@ void Engine::renderGui(void* hdcVoid, int width, int height) {
                 if (it.equipped) {
                     SetTextColor(memDC, RGB(40, 230, 80)); // Green for equipped
                     itemLine += "   [EQUIPPED]";
+                } else if (isSelected) {
+                    SetTextColor(memDC, RGB(255, 255, 255)); // Bright white for selected
                 } else {
-                    SetTextColor(memDC, RGB(220, 225, 235));
+                    SetTextColor(memDC, RGB(200, 210, 225));
                 }
 
-                TextOutA(memDC, modalX + 30, itemY, itemLine.c_str(), static_cast<int>(itemLine.size()));
-                itemY += 23;
+                TextOutA(memDC, modalX + 20, itemY + 2, itemLine.c_str(), static_cast<int>(itemLine.size()));
+                itemY += 24;
             }
         }
 
         // Footer instructions
-        SetTextColor(memDC, RGB(140, 200, 240));
-        std::string foot = "Press [1-9] to Use/Equip  |  [Shift + 1-9] to Drop  |  [I / ESC] Close";
-        RECT rFoot = { modalX, modalY + modalH - 30, modalX + modalW, modalY + modalH - 8 };
+        SetTextColor(memDC, RGB(140, 210, 255));
+        std::string foot = "[Up/Down/Click] Select  |  [Enter/Space/L-Click] Use/Equip  |  [D/Del/R-Click] Drop  |  [I/ESC] Close";
+        RECT rFoot = { modalX, modalY + modalH - 28, modalX + modalW, modalY + modalH - 6 };
         DrawTextA(memDC, foot.c_str(), static_cast<int>(foot.size()), &rFoot, DT_CENTER | DT_SINGLELINE);
 
         DeleteObject(hbrModalBg);
         DeleteObject(hpenModalBorder);
+        DeleteObject(hbrSelectedRow);
+        DeleteObject(hpenSelectedBorder);
     }
 
     // 7. Game Over / Victory Overlay

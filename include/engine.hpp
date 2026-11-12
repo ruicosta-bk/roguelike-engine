@@ -72,6 +72,14 @@ public:
     void toggleInventory() { m_inventoryOpen = !m_inventoryOpen; }
     void setInventoryOpen(bool open) { m_inventoryOpen = open; }
 
+    size_t getInventorySelectedIndex() const { return m_inventorySelectedIndex; }
+    void setInventorySelectedIndex(size_t idx);
+    void selectPrevInventoryItem();
+    void selectNextInventoryItem();
+    bool useOrEquipSelectedItem();
+    bool dropSelectedItem();
+    void handleInventoryClick(int mouseX, int mouseY, bool rightClick);
+
     int getTotalPlayerAttack() const;
     int getTotalPlayerDefense() const;
     const Item* getEquippedWeapon() const;
@@ -119,6 +127,7 @@ private:
     bool m_gameOver{false};
     bool m_victory{false};
     bool m_inventoryOpen{false};
+    size_t m_inventorySelectedIndex{0};
     int m_turnCount{0};
     int m_floor{1};
     int m_safeRestCount{0};
