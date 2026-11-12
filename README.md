@@ -65,11 +65,15 @@ Sau khi build thành công, trong thư mục `build/` sẽ tạo ra 2 file thự
 
 ### 2. Khi đang mở bảng Túi đồ (`I`):
 
-| Phím bấm | Hành động |
-| :--- | :--- |
-| **`1` đến `9`** | **Sử dụng / Trang bị** món đồ tương ứng ở vị trí đó (uống bình máu, đọc cuộn giấy, hoặc mang vũ khí/giáp). |
-| **`Shift + 1..9`** | **Vứt bỏ (Drop)** món đồ tương ứng rơi xuống sàn nhà ngay dưới chân bạn. |
-| **`I`** hoặc **`ESC`** | **Đóng bảng túi đồ** và quay lại điều khiển di chuyển. |
+| Thao tác | Hành động | Giải thích |
+| :--- | :--- | :--- |
+| **Chuột Trái (Left-Click)** | **Chọn & Dùng / Trang bị** | Click chuột trực tiếp vào dòng vật phẩm trên bảng để sử dụng ngay lập tức! |
+| **Chuột Phải (Right-Click)** | **Vứt bỏ (Drop)** | Click chuột phải vào món đồ để vứt ra sàn dưới chân. |
+| **Phím Mũi Tên `↑` / `↓`** hoặc **`W` / `S`** | **Di chuyển con trỏ chọn** | Thanh sáng màu vàng sẽ di chuyển lên xuống giữa các món đồ. |
+| **`Enter`** hoặc **`Space`** | **Dùng / Trang bị món đang chọn** | Uống bình máu, đọc cuộn giấy, hoặc mang vũ khí/giáp đang được chọn. |
+| **`D`** hoặc **`Delete`** | **Vứt món đang chọn ra sàn** | Vứt món đồ đang được con trỏ trỏ tới. |
+| **Phím số `1` đến `9`, `0`** | **Phím tắt nhanh** | Bấm số tương ứng (hỗ trợ cả hàng phím số trên, bàn phím Numpad và các bộ gõ tiếng Việt). |
+| **`I`** hoặc **`ESC`** | **Đóng bảng túi đồ** | Quay lại điều khiển di chuyển nhân vật. |
 
 ---
 
