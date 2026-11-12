@@ -6,13 +6,24 @@
 #include <vector>
 #include <cstdint>
 
+enum class ItemCategory {
+    Weapon,
+    Armor,
+    Potion,
+    Scroll
+};
+
 struct Item {
     int id{0};
     std::string name{"Health Potion"};
+    ItemCategory category{ItemCategory::Potion};
     char symbol{'!'};
-    std::string colorCode{"\033[1;35m"}; // Bright magenta
+    std::string colorCode{"\033[1;35m"}; // ANSI escape
     Point pos{0, 0};
-    int healAmount{12};
+    int healAmount{0};
+    int atkBonus{0};
+    int defBonus{0};
+    bool equipped{false};
     bool pickedUp{false};
 };
 
@@ -31,17 +42,17 @@ struct Entity {
 
 class Engine {
 public:
+    static constexpr size_t MAX_INVENTORY_CAPACITY = 10;
+
     Engine();
     ~Engine();
 
     void init(unsigned int seed = 1337);
     void restart();
 
-    // Interactive loops
+    // Presentation modes
     void runInteractive(); // Terminal ANSI mode
     void runGui();         // Native Win32 GDI 2D Tile GUI mode
-
-    // Headless simulation mode
     void runHeadless(int maxTicks, unsigned int seed = 1337);
 
     // Game loop actions
@@ -53,6 +64,18 @@ public:
     void addMessage(const std::string& msg);
     void addExp(int amount);
     void checkItemPickup();
+
+    // Inventory & Equipment
+    bool useOrEquipItem(size_t index);
+    bool dropItem(size_t index);
+    bool isInventoryOpen() const { return m_inventoryOpen; }
+    void toggleInventory() { m_inventoryOpen = !m_inventoryOpen; }
+    void setInventoryOpen(bool open) { m_inventoryOpen = open; }
+
+    int getTotalPlayerAttack() const;
+    int getTotalPlayerDefense() const;
+    const Item* getEquippedWeapon() const;
+    const Item* getEquippedArmor() const;
 
     // Rendering
     void render() const;
@@ -77,6 +100,8 @@ public:
     std::vector<Entity>& getMonsters() { return m_monsters; }
     const std::vector<Item>& getItems() const { return m_items; }
     std::vector<Item>& getItems() { return m_items; }
+    const std::vector<Item>& getInventory() const { return m_inventory; }
+    std::vector<Item>& getInventory() { return m_inventory; }
     const Map& getMap() const { return m_map; }
     const FogOfWar& getFogOfWar() const { return m_fow; }
     const FogOfWar& getFov() const { return m_fow; }
@@ -86,12 +111,14 @@ private:
     Entity m_player;
     std::vector<Entity> m_monsters;
     std::vector<Item> m_items;
+    std::vector<Item> m_inventory;
     Map m_map;
     FogOfWar m_fow;
 
     bool m_running{true};
     bool m_gameOver{false};
     bool m_victory{false};
+    bool m_inventoryOpen{false};
     int m_turnCount{0};
     int m_floor{1};
     int m_safeRestCount{0};

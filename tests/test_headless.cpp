@@ -206,18 +206,12 @@ bool test_fov() {
     return true;
 }
 
-// 4. Item pickup and healing mechanics
-bool test_item_pickup_and_healing() {
+// 4. Inventory pickup and capacity limit
+bool test_inventory_pickup_and_capacity() {
     Engine engine;
-    engine.init(1234);
+    engine.init(1001);
 
-    const auto& items = engine.getItems();
-    TEST_ASSERT(!items.empty(), "Potions must be spawned on initial floor");
-    std::cout << "    Floor 1 spawned " << items.size() << " items.\n";
-
-    // Damage player to test healing
-    engine.getPlayer().hp = 10;
-    engine.getPlayer().maxHp = 30;
+    TEST_ASSERT(engine.getInventory().empty(), "Initial inventory must be empty");
 
     // Find an open walkable neighbor tile
     Point playerPos = engine.getPlayer().pos;
@@ -227,7 +221,6 @@ bool test_item_pickup_and_healing() {
     for (int i = 0; i < 4; ++i) {
         Point neighbor{playerPos.x + dx[i], playerPos.y + dy[i]};
         if (engine.getMap().isWalkable(neighbor.x, neighbor.y)) {
-            // Ensure no monster on that tile
             bool monsterThere = false;
             for (const auto& m : engine.getMonsters()) {
                 if (m.isAlive() && m.pos == neighbor) {
@@ -241,54 +234,239 @@ bool test_item_pickup_and_healing() {
             }
         }
     }
-    TEST_ASSERT(walkDir != -1, "Player must have at least one open adjacent walkable tile");
+    TEST_ASSERT(walkDir != -1, "Player must have an open adjacent tile");
 
     Point targetPos{playerPos.x + dx[walkDir], playerPos.y + dy[walkDir]};
 
-    // Place a custom test potion on targetPos
-    Item testPotion;
-    testPotion.id = 9999;
-    testPotion.name = "Test Health Potion";
-    testPotion.pos = targetPos;
-    testPotion.healAmount = 12;
-    testPotion.pickedUp = false;
-    engine.getItems().push_back(testPotion);
+    // Place a test item on targetPos
+    Item testItem;
+    testItem.id = 8801;
+    testItem.name = "Test Dagger";
+    testItem.category = ItemCategory::Weapon;
+    testItem.pos = targetPos;
+    testItem.atkBonus = 3;
+    testItem.pickedUp = false;
+    engine.getItems().push_back(testItem);
 
-    // Step player onto targetPos
+    // Step player onto item
     bool moved = engine.stepPlayer(dx[walkDir], dy[walkDir]);
-    TEST_ASSERT(moved, "stepPlayer onto item tile should succeed");
-    TEST_ASSERT(engine.getPlayer().pos == targetPos, "Player should be on target item tile");
+    TEST_ASSERT(moved, "Player move should succeed");
+    TEST_ASSERT(engine.getInventory().size() == 1, "Item should be added to inventory");
+    TEST_ASSERT(engine.getInventory()[0].id == 8801, "Picked up item ID should match");
 
-    // Verify item is picked up
-    bool foundAndPicked = false;
+    // Now test capacity limit (MAX_INVENTORY_CAPACITY = 10)
+    for (int i = 2; i <= 10; ++i) {
+        Item dummy;
+        dummy.id = 8800 + i;
+        dummy.name = "Dummy Item " + std::to_string(i);
+        dummy.category = ItemCategory::Potion;
+        dummy.healAmount = 5;
+        dummy.pickedUp = true;
+        engine.getInventory().push_back(dummy);
+    }
+    TEST_ASSERT(engine.getInventory().size() == Engine::MAX_INVENTORY_CAPACITY, "Inventory should be at max capacity (10)");
+
+    // Place an 11th item directly on player pos
+    Item overflowItem;
+    overflowItem.id = 9999;
+    overflowItem.name = "Overflow Item";
+    overflowItem.pos = engine.getPlayer().pos;
+    overflowItem.pickedUp = false;
+    engine.getItems().push_back(overflowItem);
+
+    // Attempt pickup
+    engine.checkItemPickup();
+
+    // Verify item was NOT picked up
+    TEST_ASSERT(engine.getInventory().size() == Engine::MAX_INVENTORY_CAPACITY, "Inventory size must not exceed capacity");
+    bool foundUnpicked = false;
     for (const auto& it : engine.getItems()) {
         if (it.id == 9999) {
-            TEST_ASSERT(it.pickedUp, "Item must be marked as pickedUp");
-            foundAndPicked = true;
+            TEST_ASSERT(!it.pickedUp, "Overflow item must remain unpicked on the floor");
+            foundUnpicked = true;
             break;
         }
     }
-    TEST_ASSERT(foundAndPicked, "Test potion must exist in engine items list");
-
-    // Verify player healed: 10 + 12 = 22
-    TEST_ASSERT(engine.getPlayer().hp == 22, "Player HP should increase by healAmount (10 + 12 = 22)");
-
-    // Test healing cap at maxHp
-    engine.getPlayer().hp = 28;
-    Item capPotion;
-    capPotion.id = 10000;
-    capPotion.pos = targetPos; // Already standing on this tile
-    capPotion.healAmount = 10;
-    capPotion.pickedUp = false;
-    engine.getItems().push_back(capPotion);
-
-    engine.checkItemPickup();
-    TEST_ASSERT(engine.getPlayer().hp == 30, "Player HP must be capped at maxHp (30)");
+    TEST_ASSERT(foundUnpicked, "Overflow item should remain in items list");
 
     return true;
 }
 
-// 5. Safe rest healing over 5 wait turns
+// 5. Equipment stat bonuses
+bool test_equipment_stat_bonuses() {
+    Engine engine;
+    engine.init(2002);
+
+    int baseAtk = engine.getPlayer().attack;
+    int baseDef = engine.getPlayer().defense;
+
+    TEST_ASSERT(engine.getTotalPlayerAttack() == baseAtk, "Initial attack should equal base attack");
+    TEST_ASSERT(engine.getTotalPlayerDefense() == baseDef, "Initial defense should equal base defense");
+    TEST_ASSERT(engine.getEquippedWeapon() == nullptr, "Initial equipped weapon should be null");
+    TEST_ASSERT(engine.getEquippedArmor() == nullptr, "Initial equipped armor should be null");
+
+    // Add Weapon 1: Longsword (+5 Atk)
+    Item longsword;
+    longsword.id = 101;
+    longsword.name = "Iron Longsword";
+    longsword.category = ItemCategory::Weapon;
+    longsword.atkBonus = 5;
+    longsword.equipped = false;
+    engine.getInventory().push_back(longsword);
+
+    // Equip Longsword
+    bool equippedWep = engine.useOrEquipItem(0);
+    TEST_ASSERT(equippedWep, "Equipping longsword should return true");
+    TEST_ASSERT(engine.getInventory()[0].equipped, "Longsword should be marked equipped");
+    TEST_ASSERT(engine.getTotalPlayerAttack() == baseAtk + 5, "Total attack should include +5 bonus");
+    TEST_ASSERT(engine.getEquippedWeapon() != nullptr, "Equipped weapon pointer must not be null");
+
+    // Add Armor: Plate Armor (+6 Def)
+    Item plate;
+    plate.id = 102;
+    plate.name = "Plate Armor";
+    plate.category = ItemCategory::Armor;
+    plate.defBonus = 6;
+    plate.equipped = false;
+    engine.getInventory().push_back(plate);
+
+    // Equip Plate Armor
+    bool equippedArm = engine.useOrEquipItem(1);
+    TEST_ASSERT(equippedArm, "Equipping armor should return true");
+    TEST_ASSERT(engine.getInventory()[1].equipped, "Plate Armor should be marked equipped");
+    TEST_ASSERT(engine.getTotalPlayerDefense() == baseDef + 6, "Total defense should include +6 bonus");
+    TEST_ASSERT(engine.getEquippedArmor() != nullptr, "Equipped armor pointer must not be null");
+
+    // Add Weapon 2: Battle Axe (+7 Atk) to test weapon swapping
+    Item axe;
+    axe.id = 103;
+    axe.name = "Battle Axe";
+    axe.category = ItemCategory::Weapon;
+    axe.atkBonus = 7;
+    axe.equipped = false;
+    engine.getInventory().push_back(axe);
+
+    // Equip Battle Axe (index 2)
+    engine.useOrEquipItem(2);
+    TEST_ASSERT(!engine.getInventory()[0].equipped, "Longsword must be automatically unequipped");
+    TEST_ASSERT(engine.getInventory()[2].equipped, "Battle Axe must now be equipped");
+    TEST_ASSERT(engine.getTotalPlayerAttack() == baseAtk + 7, "Total attack should now reflect +7 Battle Axe");
+
+    // Unequip Battle Axe
+    engine.useOrEquipItem(2);
+    TEST_ASSERT(!engine.getInventory()[2].equipped, "Battle Axe should now be unequipped");
+    TEST_ASSERT(engine.getTotalPlayerAttack() == baseAtk, "Total attack should return to base attack");
+
+    return true;
+}
+
+// 6. Potion consumption and healing
+bool test_potion_consumption() {
+    Engine engine;
+    engine.init(3003);
+
+    // Damage player
+    engine.getPlayer().hp = 10;
+    engine.getPlayer().maxHp = 30;
+
+    // Add Health Potion (+15 HP)
+    Item potion;
+    potion.id = 201;
+    potion.name = "Health Potion";
+    potion.category = ItemCategory::Potion;
+    potion.healAmount = 15;
+    engine.getInventory().push_back(potion);
+
+    // Drink potion (index 0)
+    bool used = engine.useOrEquipItem(0);
+    TEST_ASSERT(used, "Drinking potion should return true");
+    TEST_ASSERT(engine.getPlayer().hp == 25, "Player HP should heal to 25 (10 + 15)");
+    TEST_ASSERT(engine.getInventory().empty(), "Consumed potion must be removed from inventory");
+
+    // Add Elixir (+25 HP) to test maxHp clamp
+    Item elixir;
+    elixir.id = 202;
+    elixir.name = "Elixir";
+    elixir.category = ItemCategory::Potion;
+    elixir.healAmount = 25;
+    engine.getInventory().push_back(elixir);
+
+    used = engine.useOrEquipItem(0);
+    TEST_ASSERT(used, "Drinking elixir should return true");
+    TEST_ASSERT(engine.getPlayer().hp == engine.getPlayer().maxHp, "Player HP must cap at maxHp (30)");
+    TEST_ASSERT(engine.getInventory().empty(), "Consumed elixir must be removed from inventory");
+
+    return true;
+}
+
+// 7. Scroll of Teleportation
+bool test_scroll_of_teleportation() {
+    Engine engine;
+    engine.init(4004);
+
+    // Add Scroll of Teleportation
+    Item scroll;
+    scroll.id = 301;
+    scroll.name = "Scroll of Teleportation";
+    scroll.category = ItemCategory::Scroll;
+    engine.getInventory().push_back(scroll);
+
+    // Read scroll
+    bool used = engine.useOrEquipItem(0);
+    TEST_ASSERT(used, "Reading scroll should return true");
+    TEST_ASSERT(engine.getInventory().empty(), "Consumed scroll must be removed from inventory");
+
+    Point newPos = engine.getPlayer().pos;
+    TEST_ASSERT(engine.getMap().isInBounds(newPos.x, newPos.y), "Teleported pos must be in bounds");
+    TEST_ASSERT(engine.getMap().isWalkable(newPos.x, newPos.y), "Teleported pos must be walkable");
+
+    // Origin fog of war at new pos must be visible
+    TEST_ASSERT(engine.getFogOfWar().isVisible(newPos.x, newPos.y), "Teleported position must be visible");
+
+    return true;
+}
+
+// 8. Dropping items from inventory
+bool test_drop_item() {
+    Engine engine;
+    engine.init(5005);
+
+    int baseAtk = engine.getPlayer().attack;
+
+    // Add Weapon and equip it
+    Item sword;
+    sword.id = 401;
+    sword.name = "Steel Sword";
+    sword.category = ItemCategory::Weapon;
+    sword.atkBonus = 4;
+    sword.equipped = true;
+    engine.getInventory().push_back(sword);
+
+    TEST_ASSERT(engine.getTotalPlayerAttack() == baseAtk + 4, "Equipped sword should add attack bonus");
+
+    // Drop item from inventory (index 0)
+    bool dropped = engine.dropItem(0);
+    TEST_ASSERT(dropped, "dropItem should return true");
+    TEST_ASSERT(engine.getInventory().empty(), "Dropped item must be removed from inventory");
+    TEST_ASSERT(engine.getTotalPlayerAttack() == baseAtk, "Attack bonus should be removed when item is dropped");
+
+    // Verify item was placed on the floor at player's position
+    bool foundOnFloor = false;
+    for (const auto& it : engine.getItems()) {
+        if (it.id == 401) {
+            TEST_ASSERT(it.pos == engine.getPlayer().pos, "Dropped item must be placed at player pos");
+            TEST_ASSERT(!it.pickedUp, "Dropped item must have pickedUp = false");
+            TEST_ASSERT(!it.equipped, "Dropped item must have equipped = false");
+            foundOnFloor = true;
+            break;
+        }
+    }
+    TEST_ASSERT(foundOnFloor, "Dropped item must be present on the dungeon floor");
+
+    return true;
+}
+
+// 9. Safe rest healing over 5 wait turns
 bool test_safe_rest_healing() {
     Engine engine;
     engine.init(5555);
@@ -327,7 +505,7 @@ bool test_safe_rest_healing() {
     return true;
 }
 
-// 6. EXP gain and Level Up stats increase
+// 10. EXP gain and Level Up stats increase
 bool test_exp_and_level_up() {
     Engine engine;
     engine.init(777);
@@ -363,13 +541,13 @@ bool test_exp_and_level_up() {
     return true;
 }
 
-// 7. Quick restart test
+// 11. Quick restart test
 bool test_quick_restart() {
     Engine engine;
     engine.init(888);
 
     // Advance turns and modify state
-    engine.stepPlayer(0, 0); // may do nothing or move
+    engine.stepPlayer(0, 0);
     engine.getPlayer().hp = 5;
     engine.addExp(30);
 
@@ -384,11 +562,12 @@ bool test_quick_restart() {
     TEST_ASSERT(engine.getPlayerLevel() == 1, "Level should reset to 1");
     TEST_ASSERT(engine.getPlayerExp() == 0, "EXP should reset to 0");
     TEST_ASSERT(engine.getPlayer().hp == engine.getPlayer().maxHp, "HP should reset to maxHp");
+    TEST_ASSERT(engine.getInventory().empty(), "Inventory should reset to empty");
 
     return true;
 }
 
-// 8. 500-tick game simulation
+// 12. 500-tick game simulation
 bool test_headless_simulation() {
     std::cout << "    Instantiating Engine and running 500-tick headless simulation...\n";
     Engine engine;
@@ -410,7 +589,11 @@ int main() {
     RUN_TEST(test_map_generation);
     RUN_TEST(test_pathfinding);
     RUN_TEST(test_fov);
-    RUN_TEST(test_item_pickup_and_healing);
+    RUN_TEST(test_inventory_pickup_and_capacity);
+    RUN_TEST(test_equipment_stat_bonuses);
+    RUN_TEST(test_potion_consumption);
+    RUN_TEST(test_scroll_of_teleportation);
+    RUN_TEST(test_drop_item);
     RUN_TEST(test_safe_rest_healing);
     RUN_TEST(test_exp_and_level_up);
     RUN_TEST(test_quick_restart);

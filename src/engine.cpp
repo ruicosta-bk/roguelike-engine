@@ -42,7 +42,9 @@ void Engine::init(unsigned int seed) {
     m_running = true;
     m_gameOver = false;
     m_victory = false;
+    m_inventoryOpen = false;
     m_messageLog.clear();
+    m_inventory.clear();
 
     m_map.generate(m_seed);
     m_fow.init(m_map.getWidth(), m_map.getHeight());
@@ -57,9 +59,9 @@ void Engine::init(unsigned int seed) {
     m_player.attack = 5;
     m_player.defense = 2;
 
-    addMessage("Welcome to the Dungeons of Doom! [WASD/Arrows: Move, R: Restart, Q: Quit]");
+    addMessage("Welcome to the Dungeons of Doom! [WASD: Move, I: Inventory, Q: Quit]");
     spawnMonsters(6);
-    spawnItems(4);
+    spawnItems(6);
     m_fow.computeFOV(m_map, m_player.pos, 8);
     checkItemPickup();
 }
@@ -122,18 +124,128 @@ void Engine::spawnItems(int count) {
     m_items.clear();
     auto spawnPoints = m_map.getItemSpawns(count);
     int idCounter = 1;
+    std::mt19937 rng(m_seed + static_cast<unsigned int>(m_floor) * 2000 + 77);
 
-    for (const auto& pt : spawnPoints) {
+    for (size_t i = 0; i < spawnPoints.size(); ++i) {
+        Point pt = spawnPoints[i];
         Item item;
         item.id = idCounter++;
-        item.name = "Health Potion";
-        item.symbol = '!';
-        item.colorCode = "\033[1;35m"; // Bright magenta
         item.pos = pt;
-        item.healAmount = 12;
         item.pickedUp = false;
+        item.equipped = false;
+
+        unsigned int roll = rng() % 100;
+
+        if (i == 0) {
+            // Guaranteed Weapon slot
+            if (m_floor == 1) {
+                item.name = "Dagger";
+                item.category = ItemCategory::Weapon;
+                item.symbol = ')';
+                item.colorCode = "\033[1;36m";
+                item.atkBonus = 3;
+            } else if (m_floor == 2) {
+                item.name = "Iron Longsword";
+                item.category = ItemCategory::Weapon;
+                item.symbol = ')';
+                item.colorCode = "\033[1;36m";
+                item.atkBonus = 5;
+            } else {
+                item.name = "Battle Axe";
+                item.category = ItemCategory::Weapon;
+                item.symbol = ')';
+                item.colorCode = "\033[1;36m";
+                item.atkBonus = 7;
+            }
+        } else if (i == 1) {
+            // Guaranteed Armor slot
+            if (m_floor == 1) {
+                item.name = "Leather Armor";
+                item.category = ItemCategory::Armor;
+                item.symbol = '[';
+                item.colorCode = "\033[1;37m";
+                item.defBonus = 2;
+            } else if (m_floor == 2) {
+                item.name = "Chainmail";
+                item.category = ItemCategory::Armor;
+                item.symbol = '[';
+                item.colorCode = "\033[1;37m";
+                item.defBonus = 4;
+            } else {
+                item.name = "Plate Armor";
+                item.category = ItemCategory::Armor;
+                item.symbol = '[';
+                item.colorCode = "\033[1;37m";
+                item.defBonus = 6;
+            }
+        } else if (i == 2) {
+            // Guaranteed Scroll slot
+            item.name = "Scroll of Teleportation";
+            item.category = ItemCategory::Scroll;
+            item.symbol = '?';
+            item.colorCode = "\033[1;33m";
+        } else {
+            // Potions or additional equipment
+            if (roll < 55) {
+                item.name = "Health Potion";
+                item.category = ItemCategory::Potion;
+                item.symbol = '!';
+                item.colorCode = "\033[1;35m";
+                item.healAmount = 15;
+            } else if (roll < 80) {
+                item.name = "Elixir";
+                item.category = ItemCategory::Potion;
+                item.symbol = '!';
+                item.colorCode = "\033[1;35m";
+                item.healAmount = 25;
+            } else {
+                item.name = (m_floor >= 2) ? "Iron Longsword" : "Dagger";
+                item.category = ItemCategory::Weapon;
+                item.symbol = ')';
+                item.colorCode = "\033[1;36m";
+                item.atkBonus = (m_floor >= 2) ? 5 : 3;
+            }
+        }
         m_items.push_back(item);
     }
+}
+
+int Engine::getTotalPlayerAttack() const {
+    int bonus = 0;
+    for (const auto& item : m_inventory) {
+        if (item.equipped && item.category == ItemCategory::Weapon) {
+            bonus += item.atkBonus;
+        }
+    }
+    return m_player.attack + bonus;
+}
+
+int Engine::getTotalPlayerDefense() const {
+    int bonus = 0;
+    for (const auto& item : m_inventory) {
+        if (item.equipped && item.category == ItemCategory::Armor) {
+            bonus += item.defBonus;
+        }
+    }
+    return m_player.defense + bonus;
+}
+
+const Item* Engine::getEquippedWeapon() const {
+    for (const auto& item : m_inventory) {
+        if (item.equipped && item.category == ItemCategory::Weapon) {
+            return &item;
+        }
+    }
+    return nullptr;
+}
+
+const Item* Engine::getEquippedArmor() const {
+    for (const auto& item : m_inventory) {
+        if (item.equipped && item.category == ItemCategory::Armor) {
+            return &item;
+        }
+    }
+    return nullptr;
 }
 
 void Engine::addMessage(const std::string& msg) {
@@ -161,15 +273,117 @@ void Engine::addExp(int amount) {
 void Engine::checkItemPickup() {
     for (auto& item : m_items) {
         if (!item.pickedUp && item.pos == m_player.pos) {
-            item.pickedUp = true;
-            m_player.hp = std::min(m_player.maxHp, m_player.hp + item.healAmount);
-            addMessage("You drank a Health Potion (+" + std::to_string(item.healAmount) + " HP)!");
+            if (m_inventory.size() < MAX_INVENTORY_CAPACITY) {
+                item.pickedUp = true;
+                m_inventory.push_back(item);
+                addMessage("Picked up " + item.name + ". Press 'I' to inspect.");
+            } else {
+                addMessage("Inventory full (10/10)! Cannot pick up " + item.name + ".");
+            }
         }
     }
 }
 
+bool Engine::useOrEquipItem(size_t index) {
+    if (index >= m_inventory.size()) {
+        return false;
+    }
+
+    Item& item = m_inventory[index];
+
+    if (item.category == ItemCategory::Weapon) {
+        if (item.equipped) {
+            item.equipped = false;
+            addMessage("Unequipped " + item.name + ".");
+        } else {
+            // Unequip any existing weapon
+            for (auto& it : m_inventory) {
+                if (it.category == ItemCategory::Weapon) {
+                    it.equipped = false;
+                }
+            }
+            item.equipped = true;
+            addMessage("Equipped " + item.name + " (+" + std::to_string(item.atkBonus) + " Atk)!");
+        }
+        return true;
+    }
+
+    if (item.category == ItemCategory::Armor) {
+        if (item.equipped) {
+            item.equipped = false;
+            addMessage("Unequipped " + item.name + ".");
+        } else {
+            // Unequip any existing armor
+            for (auto& it : m_inventory) {
+                if (it.category == ItemCategory::Armor) {
+                    it.equipped = false;
+                }
+            }
+            item.equipped = true;
+            addMessage("Equipped " + item.name + " (+" + std::to_string(item.defBonus) + " Def)!");
+        }
+        return true;
+    }
+
+    if (item.category == ItemCategory::Potion) {
+        m_player.hp = std::min(m_player.maxHp, m_player.hp + item.healAmount);
+        addMessage("You drank " + item.name + " (+" + std::to_string(item.healAmount) + " HP)!");
+        m_inventory.erase(m_inventory.begin() + index);
+        return true;
+    }
+
+    if (item.category == ItemCategory::Scroll) {
+        std::vector<Point> walkableTiles;
+        for (int y = 0; y < m_map.getHeight(); ++y) {
+            for (int x = 0; x < m_map.getWidth(); ++x) {
+                if (m_map.isWalkable(x, y)) {
+                    bool occupied = (m_player.pos == Point{x, y});
+                    for (const auto& m : m_monsters) {
+                        if (m.isAlive() && m.pos == Point{x, y}) {
+                            occupied = true;
+                            break;
+                        }
+                    }
+                    if (!occupied) {
+                        walkableTiles.push_back({x, y});
+                    }
+                }
+            }
+        }
+        if (!walkableTiles.empty()) {
+            std::mt19937 rng(m_seed + static_cast<unsigned int>(m_turnCount) * 17 + 101);
+            Point dest = walkableTiles[rng() % walkableTiles.size()];
+            m_player.pos = dest;
+            m_fow.computeFOV(m_map, m_player.pos, 8);
+            checkItemPickup();
+            addMessage("You read " + item.name + " and teleported away!");
+        }
+        m_inventory.erase(m_inventory.begin() + index);
+        return true;
+    }
+
+    return false;
+}
+
+bool Engine::dropItem(size_t index) {
+    if (index >= m_inventory.size()) {
+        return false;
+    }
+    Item item = m_inventory[index];
+    item.equipped = false;
+    item.pickedUp = false;
+    item.pos = m_player.pos;
+    m_items.push_back(item);
+    m_inventory.erase(m_inventory.begin() + index);
+    addMessage("Dropped " + item.name + " on the floor.");
+    return true;
+}
+
 void Engine::attackEntity(Entity& attacker, Entity& defender) {
-    int damage = std::max(1, attacker.attack - defender.defense);
+    int atkVal = (attacker.id == m_player.id) ? getTotalPlayerAttack() : attacker.attack;
+    int defVal = (defender.id == m_player.id) ? getTotalPlayerDefense() : defender.defense;
+
+    int damage = std::max(1, atkVal - defVal);
     defender.hp -= damage;
     if (defender.hp <= 0) {
         defender.hp = 0;
@@ -259,7 +473,7 @@ bool Engine::descendStairs() {
         m_player.pos = m_map.getPlayerSpawn();
         m_player.hp = std::min(m_player.maxHp, m_player.hp + 8); // Descending heals some HP
         spawnMonsters(6 + m_floor);
-        spawnItems(4);
+        spawnItems(6);
         m_fow.computeFOV(m_map, m_player.pos, 8);
         checkItemPickup();
         addMessage("You descended to Dungeon Floor " + std::to_string(m_floor) + "!");
@@ -350,7 +564,7 @@ void Engine::updateMonsters() {
 
 std::string Engine::renderToString() const {
     std::string out;
-    out.reserve(80 * 25 * 4 + 1024);
+    out.reserve(80 * 25 * 4 + 2048);
 
     // Cursor reset to top-left to avoid flicker
     out += "\033[H";
@@ -381,7 +595,7 @@ std::string Engine::renderToString() const {
                 }
                 if (monsterDrawn) continue;
 
-                // Check consumable item on visible tile
+                // Check consumable item or equipment on visible tile
                 bool itemDrawn = false;
                 for (const auto& item : m_items) {
                     if (!item.pickedUp && item.pos.x == x && item.pos.y == y) {
@@ -447,7 +661,7 @@ std::string Engine::renderToString() const {
     out += "Level: \033[1;32m" + std::to_string(m_playerLevel) + "\033[0m | ";
     out += "EXP: \033[1;33m" + std::to_string(m_playerExp) + "/" + std::to_string(m_playerExpToNext) + "\033[0m\033[K\n";
 
-    // HUD Line 2: HP Bar, Atk, Def
+    // HUD Line 2: HP Bar, Atk (with weapon bonus), Def (with armor bonus)
     int barWidth = 16;
     int curHp = std::max(0, m_player.hp);
     int maxHp = std::max(1, m_player.maxHp);
@@ -461,32 +675,58 @@ std::string Engine::renderToString() const {
         hpColor = "\033[1;33m"; // Yellow
     }
 
+    const Item* wep = getEquippedWeapon();
+    const Item* arm = getEquippedArmor();
+    std::string wepStr = wep ? (" (+" + std::to_string(wep->atkBonus) + " " + wep->name + ")") : "";
+    std::string armStr = arm ? (" (+" + std::to_string(arm->defBonus) + " " + arm->name + ")") : "";
+
     out += " HP: " + hpColor + "[" + std::string(static_cast<size_t>(filled), '=') +
            std::string(static_cast<size_t>(barWidth - filled), ' ') + "] ";
     out += std::to_string(curHp) + "/" + std::to_string(maxHp) + "\033[0m | ";
-    out += "Atk: \033[1;35m" + std::to_string(m_player.attack) + "\033[0m | ";
-    out += "Def: \033[1;35m" + std::to_string(m_player.defense) + "\033[0m\033[K\n";
+    out += "Atk: \033[1;35m" + std::to_string(getTotalPlayerAttack()) + wepStr + "\033[0m | ";
+    out += "Def: \033[1;35m" + std::to_string(getTotalPlayerDefense()) + armStr + "\033[0m\033[K\n";
 
     // Status / Controls
     if (m_gameOver) {
         out += " \033[1;31m*** GAME OVER - Press [R] to Restart, [Q] to Quit ***\033[0m\033[K\n";
     } else if (m_victory) {
         out += " \033[1;32m*** VICTORY! Dungeon Cleared! Press [R] to Restart, [Q] to Quit ***\033[0m\033[K\n";
+    } else if (m_inventoryOpen) {
+        out += " \033[1;33m*** INVENTORY OPEN *** [1-9] Use/Equip | [Shift+1-9] Drop | [I] Close\033[0m\033[K\n";
     } else {
-        out += " \033[90mControls: [WASD/Arrows] Move | [.] Rest | [>] Stairs | [R] Restart | [Q] Quit\033[0m\033[K\n";
+        out += " \033[90mControls: [WASD] Move | [I] Inventory | [.] Rest | [>] Stairs | [R] Restart | [Q] Quit\033[0m\033[K\n";
     }
 
-    // Message Log (last 5 messages)
-    out += "\033[1;33m--- Combat Log ---\033[0m\033[K\n";
-    int msgCount = static_cast<int>(m_messageLog.size());
-    int startIdx = std::max(0, msgCount - 5);
-    int printed = 0;
-    for (int i = startIdx; i < msgCount; ++i) {
-        out += " > " + m_messageLog[static_cast<size_t>(i)] + "\033[K\n";
-        printed++;
-    }
-    for (int i = printed; i < 5; ++i) {
-        out += "\033[K\n";
+    // Modal or Combat Log
+    if (m_inventoryOpen) {
+        out += "\033[1;33m--- Inventory (" + std::to_string(m_inventory.size()) + "/10) ---\033[0m\033[K\n";
+        for (size_t i = 0; i < 5; ++i) {
+            if (i < m_inventory.size()) {
+                const auto& item = m_inventory[i];
+                std::string tag = item.equipped ? " \033[1;32m[EQUIPPED]\033[0m" : "";
+                std::string bonus = "";
+                if (item.category == ItemCategory::Weapon) bonus = " (+ " + std::to_string(item.atkBonus) + " Atk)";
+                else if (item.category == ItemCategory::Armor) bonus = " (+ " + std::to_string(item.defBonus) + " Def)";
+                else if (item.category == ItemCategory::Potion) bonus = " (Heal " + std::to_string(item.healAmount) + " HP)";
+                else if (item.category == ItemCategory::Scroll) bonus = " (Teleport)";
+
+                out += " [" + std::to_string(i + 1) + "] " + item.name + bonus + tag + "\033[K\n";
+            } else {
+                out += "\033[K\n";
+            }
+        }
+    } else {
+        out += "\033[1;33m--- Combat Log ---\033[0m\033[K\n";
+        int msgCount = static_cast<int>(m_messageLog.size());
+        int startIdx = std::max(0, msgCount - 5);
+        int printed = 0;
+        for (int i = startIdx; i < msgCount; ++i) {
+            out += " > " + m_messageLog[static_cast<size_t>(i)] + "\033[K\n";
+            printed++;
+        }
+        for (int i = printed; i < 5; ++i) {
+            out += "\033[K\n";
+        }
     }
 
     out += "\033[0m";
@@ -527,6 +767,25 @@ void Engine::restoreConsole() {
 }
 
 void Engine::handleKey(int ch) {
+    if (m_inventoryOpen) {
+        if (ch == 'i' || ch == 'I' || ch == 27) {
+            m_inventoryOpen = false;
+        } else if (ch >= '1' && ch <= '9') {
+            useOrEquipItem(static_cast<size_t>(ch - '1'));
+        } else if (ch == '!') {
+            dropItem(0);
+        } else if (ch == '@') {
+            dropItem(1);
+        } else if (ch == '#') {
+            dropItem(2);
+        } else if (ch == '$') {
+            dropItem(3);
+        } else if (ch == '%') {
+            dropItem(4);
+        }
+        return;
+    }
+
     switch (ch) {
         case 'q':
         case 'Q':
@@ -536,6 +795,10 @@ void Engine::handleKey(int ch) {
         case 'r':
         case 'R':
             restart();
+            break;
+        case 'i':
+        case 'I':
+            m_inventoryOpen = true;
             break;
         case 'w':
         case 'W':
@@ -574,6 +837,9 @@ void Engine::handleKey(int ch) {
 }
 
 void Engine::handleSpecialKey(int code) {
+    if (m_inventoryOpen) {
+        return;
+    }
     switch (code) {
         case 72: // Up
             stepPlayer(0, -1);
@@ -646,6 +912,30 @@ void Engine::runHeadless(int maxTicks, unsigned int seed) {
             init(seed + static_cast<unsigned int>(tick) + 1);
         }
 
+        // Check if any weapon in inventory can be equipped
+        for (size_t i = 0; i < m_inventory.size(); ++i) {
+            if (m_inventory[i].category == ItemCategory::Weapon && !m_inventory[i].equipped) {
+                useOrEquipItem(i);
+                break;
+            }
+        }
+        // Check if any armor in inventory can be equipped
+        for (size_t i = 0; i < m_inventory.size(); ++i) {
+            if (m_inventory[i].category == ItemCategory::Armor && !m_inventory[i].equipped) {
+                useOrEquipItem(i);
+                break;
+            }
+        }
+        // If HP is low (< 50%) and we have a potion, drink it!
+        if (m_player.hp < m_player.maxHp / 2) {
+            for (size_t i = 0; i < m_inventory.size(); ++i) {
+                if (m_inventory[i].category == ItemCategory::Potion) {
+                    useOrEquipItem(i);
+                    break;
+                }
+            }
+        }
+
         // Find stairs position on current floor
         Point stairs{-1, -1};
         for (int y = 0; y < m_map.getHeight(); ++y) {
@@ -681,8 +971,8 @@ void Engine::runHeadless(int maxTicks, unsigned int seed) {
         }
         if (acted) continue;
 
-        // 3. If low HP and a potion is visible/reachable, try pathfinding towards potion
-        if (m_player.hp < m_player.maxHp / 2) {
+        // 3. If there is an item nearby on the floor, step towards it to pick it up
+        if (m_inventory.size() < MAX_INVENTORY_CAPACITY) {
             for (const auto& item : m_items) {
                 if (!item.pickedUp) {
                     auto path = Pathfinding::findPath(m_map, m_player.pos, item.pos);
@@ -777,51 +1067,73 @@ static LRESULT CALLBACK GuiWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
         case WM_KEYDOWN: {
             if (!engine) break;
             bool handled = false;
-            switch (wParam) {
-                case VK_ESCAPE:
-                case 'Q':
-                    DestroyWindow(hwnd);
+
+            if (engine->isInventoryOpen()) {
+                if (wParam == VK_ESCAPE || wParam == 'I') {
+                    engine->setInventoryOpen(false);
                     handled = true;
-                    break;
-                case 'R':
-                    engine->restart();
-                    handled = true;
-                    break;
-                case 'W':
-                case VK_UP:
-                    engine->stepPlayer(0, -1);
-                    handled = true;
-                    break;
-                case 'S':
-                case VK_DOWN:
-                    engine->stepPlayer(0, 1);
-                    handled = true;
-                    break;
-                case 'A':
-                case VK_LEFT:
-                    engine->stepPlayer(-1, 0);
-                    handled = true;
-                    break;
-                case 'D':
-                case VK_RIGHT:
-                    engine->stepPlayer(1, 0);
-                    handled = true;
-                    break;
-                case VK_SPACE:
-                    engine->waitTurn();
-                    handled = true;
-                    break;
-                case VK_OEM_PERIOD:
-                    if (GetKeyState(VK_SHIFT) & 0x8000) {
-                        engine->descendStairs();
+                } else if (wParam >= '1' && wParam <= '9') {
+                    size_t idx = static_cast<size_t>(wParam - '1');
+                    bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+                    if (shift) {
+                        engine->dropItem(idx);
                     } else {
-                        engine->waitTurn();
+                        engine->useOrEquipItem(idx);
                     }
                     handled = true;
-                    break;
-                default:
-                    break;
+                }
+            } else {
+                switch (wParam) {
+                    case VK_ESCAPE:
+                    case 'Q':
+                        DestroyWindow(hwnd);
+                        handled = true;
+                        break;
+                    case 'R':
+                        engine->restart();
+                        handled = true;
+                        break;
+                    case 'I':
+                        engine->setInventoryOpen(true);
+                        handled = true;
+                        break;
+                    case 'W':
+                    case VK_UP:
+                        engine->stepPlayer(0, -1);
+                        handled = true;
+                        break;
+                    case 'S':
+                    case VK_DOWN:
+                        engine->stepPlayer(0, 1);
+                        handled = true;
+                        break;
+                    case 'A':
+                    case VK_LEFT:
+                        engine->stepPlayer(-1, 0);
+                        handled = true;
+                        break;
+                    case 'D':
+                    case VK_RIGHT:
+                        engine->stepPlayer(1, 0);
+                        handled = true;
+                        break;
+                    case VK_SPACE:
+                        engine->waitTurn();
+                        handled = true;
+                        break;
+                    case VK_OEM_PERIOD:
+                        if (GetKeyState(VK_SHIFT) & 0x8000) {
+                            engine->descendStairs();
+                        } else {
+                            engine->waitTurn();
+                        }
+                        handled = true;
+                        break;
+                    default:
+                        break;
+                }
             }
+
             if (handled) {
                 InvalidateRect(hwnd, NULL, FALSE);
             }
@@ -831,19 +1143,31 @@ static LRESULT CALLBACK GuiWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
         case WM_CHAR: {
             if (!engine) break;
             bool handled = false;
-            if (wParam == '>') {
-                engine->descendStairs();
-                handled = true;
-            } else if (wParam == '.') {
-                engine->waitTurn();
-                handled = true;
-            } else if (wParam == 'r' || wParam == 'R') {
-                engine->restart();
-                handled = true;
-            } else if (wParam == 'q' || wParam == 'Q') {
-                DestroyWindow(hwnd);
-                handled = true;
+
+            if (engine->isInventoryOpen()) {
+                if (wParam == 'i' || wParam == 'I') {
+                    engine->setInventoryOpen(false);
+                    handled = true;
+                }
+            } else {
+                if (wParam == '>') {
+                    engine->descendStairs();
+                    handled = true;
+                } else if (wParam == '.') {
+                    engine->waitTurn();
+                    handled = true;
+                } else if (wParam == 'r' || wParam == 'R') {
+                    engine->restart();
+                    handled = true;
+                } else if (wParam == 'i' || wParam == 'I') {
+                    engine->setInventoryOpen(true);
+                    handled = true;
+                } else if (wParam == 'q' || wParam == 'Q') {
+                    DestroyWindow(hwnd);
+                    handled = true;
+                }
             }
+
             if (handled) {
                 InvalidateRect(hwnd, NULL, FALSE);
             }
@@ -1041,24 +1365,42 @@ void Engine::renderGui(void* hdcVoid, int width, int height) {
         }
     }
 
-    // 3. Render Consumable Items (Potions)
+    // 3. Render Floor Items
     HBRUSH hbrPotion = CreateSolidBrush(RGB(220, 40, 130));
+    HBRUSH hbrWeapon = CreateSolidBrush(RGB(80, 200, 240));
+    HBRUSH hbrArmor = CreateSolidBrush(RGB(170, 185, 210));
+    HBRUSH hbrScroll = CreateSolidBrush(RGB(240, 220, 120));
     HBRUSH hbrGold = CreateSolidBrush(RGB(220, 175, 50));
+
+    SetBkMode(memDC, TRANSPARENT);
+    HFONT oldFont = static_cast<HFONT>(SelectObject(memDC, hFontTile));
 
     for (const auto& item : m_items) {
         if (!item.pickedUp && m_fow.isVisible(item.pos.x, item.pos.y)) {
             int ix = item.pos.x * TILE_SIZE;
             int iy = item.pos.y * TILE_SIZE;
 
+            HBRUSH itemBrush = hbrPotion;
+            COLORREF itemTxtColor = RGB(255, 255, 255);
+            if (item.category == ItemCategory::Weapon) {
+                itemBrush = hbrWeapon;
+                itemTxtColor = RGB(10, 40, 60);
+            } else if (item.category == ItemCategory::Armor) {
+                itemBrush = hbrArmor;
+                itemTxtColor = RGB(20, 30, 40);
+            } else if (item.category == ItemCategory::Scroll) {
+                itemBrush = hbrScroll;
+                itemTxtColor = RGB(50, 40, 10);
+            }
+
             HPEN oldPen = static_cast<HPEN>(SelectObject(memDC, hpenNull));
-            HBRUSH oldBrush = static_cast<HBRUSH>(SelectObject(memDC, hbrPotion));
-            Ellipse(memDC, ix + 2, iy + 4, ix + TILE_SIZE - 2, iy + TILE_SIZE);
+            HBRUSH oldBrush = static_cast<HBRUSH>(SelectObject(memDC, itemBrush));
+            Ellipse(memDC, ix + 2, iy + 2, ix + TILE_SIZE - 2, iy + TILE_SIZE - 2);
 
-            SelectObject(memDC, hbrGold);
-            RECT rCork = { ix + 5, iy + 1, ix + TILE_SIZE - 5, iy + 4 };
-            FillRect(memDC, &rCork, hbrGold);
-
-            SetPixel(memDC, ix + 4, iy + 6, RGB(255, 180, 220));
+            SetTextColor(memDC, itemTxtColor);
+            char sym[2] = { item.symbol, '\0' };
+            RECT rSym = { ix, iy, ix + TILE_SIZE, iy + TILE_SIZE };
+            DrawTextA(memDC, sym, 1, &rSym, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
             SelectObject(memDC, oldBrush);
             SelectObject(memDC, oldPen);
@@ -1071,9 +1413,6 @@ void Engine::renderGui(void* hdcVoid, int width, int height) {
     HBRUSH hbrOrc = CreateSolidBrush(RGB(190, 40, 40));
     HBRUSH hbrDragon = CreateSolidBrush(RGB(245, 30, 30));
     HPEN hpenDarkEntity = CreatePen(PS_SOLID, 1, RGB(15, 15, 20));
-
-    SetBkMode(memDC, TRANSPARENT);
-    HFONT oldFont = static_cast<HFONT>(SelectObject(memDC, hFontTile));
 
     // Monsters
     for (const auto& m : m_monsters) {
@@ -1209,15 +1548,21 @@ void Engine::renderGui(void* hdcVoid, int width, int height) {
                      ((m_player.hp > m_player.maxHp / 4) ? hbrYellow : hbrRed);
     FillRect(memDC, &rHpFg, curHpBr);
 
-    // Attack & Defense
+    // Attack & Defense with equipped gear names
+    const Item* wep = getEquippedWeapon();
+    const Item* arm = getEquippedArmor();
+    std::string wepStr = wep ? (" (+" + std::to_string(wep->atkBonus) + " " + wep->name + ")") : "";
+    std::string armStr = arm ? (" (+" + std::to_string(arm->defBonus) + " " + arm->name + ")") : "";
+
     SetTextColor(memDC, RGB(220, 180, 100));
-    std::string sCombatStats = "Attack: " + std::to_string(m_player.attack) +
-                               "   |   Defense: " + std::to_string(m_player.defense);
+    std::string sCombatStats = "Attack: " + std::to_string(getTotalPlayerAttack()) + wepStr +
+                               "   |   Defense: " + std::to_string(getTotalPlayerDefense()) + armStr;
     TextOutA(memDC, 20, hudY + 86, sCombatStats.c_str(), static_cast<int>(sCombatStats.size()));
 
     // Controls Hints
     SetTextColor(memDC, RGB(140, 150, 165));
-    std::string c1 = "[WASD / Arrow Keys] Move & Attack   |   [Space / .] Rest (5 turns = +1 HP)";
+    std::string c1 = "[WASD / Arrows] Move & Attack   |   [I] Inventory (" +
+                     std::to_string(m_inventory.size()) + "/10)   |   [Space / .] Rest";
     TextOutA(memDC, 20, hudY + 112, c1.c_str(), static_cast<int>(c1.size()));
     std::string c2 = "[>] Descend Stairs   |   [R] Quick Restart   |   [Q / ESC] Quit";
     TextOutA(memDC, 20, hudY + 134, c2.c_str(), static_cast<int>(c2.size()));
@@ -1241,7 +1586,73 @@ void Engine::renderGui(void* hdcVoid, int width, int height) {
         logY += 22;
     }
 
-    // 6. Game Over / Victory Overlay
+    // 6. Inventory Modal (if open)
+    if (m_inventoryOpen) {
+        int modalW = 560;
+        int modalH = 320;
+        int modalX = (width - modalW) / 2;
+        int modalY = 20;
+
+        HBRUSH hbrModalBg = CreateSolidBrush(RGB(16, 18, 24));
+        HPEN hpenModalBorder = CreatePen(PS_SOLID, 2, RGB(240, 200, 60)); // Gold border
+
+        HPEN oldP = static_cast<HPEN>(SelectObject(memDC, hpenModalBorder));
+        HBRUSH oldB = static_cast<HBRUSH>(SelectObject(memDC, hbrModalBg));
+        Rectangle(memDC, modalX, modalY, modalX + modalW, modalY + modalH);
+        SelectObject(memDC, oldB);
+        SelectObject(memDC, oldP);
+
+        // Modal Title
+        SetTextColor(memDC, RGB(255, 215, 0));
+        std::string title = "=== INVENTORY & EQUIPMENT (" + std::to_string(m_inventory.size()) + "/10) ===";
+        RECT rTitle = { modalX, modalY + 12, modalX + modalW, modalY + 35 };
+        DrawTextA(memDC, title.c_str(), static_cast<int>(title.size()), &rTitle, DT_CENTER | DT_SINGLELINE);
+
+        // Items list
+        int itemY = modalY + 45;
+        if (m_inventory.empty()) {
+            SetTextColor(memDC, RGB(140, 140, 150));
+            std::string emptyMsg = "(Backpack is empty. Explore dungeon tiles to find items!)";
+            RECT rEmpty = { modalX, itemY + 40, modalX + modalW, itemY + 70 };
+            DrawTextA(memDC, emptyMsg.c_str(), static_cast<int>(emptyMsg.size()), &rEmpty, DT_CENTER | DT_SINGLELINE);
+        } else {
+            for (size_t i = 0; i < m_inventory.size(); ++i) {
+                const auto& it = m_inventory[i];
+                std::string itemLine = "[" + std::to_string(i + 1) + "] " + it.name;
+
+                if (it.category == ItemCategory::Weapon) {
+                    itemLine += "  (Atk +" + std::to_string(it.atkBonus) + ")";
+                } else if (it.category == ItemCategory::Armor) {
+                    itemLine += "  (Def +" + std::to_string(it.defBonus) + ")";
+                } else if (it.category == ItemCategory::Potion) {
+                    itemLine += "  (Heals +" + std::to_string(it.healAmount) + " HP)";
+                } else if (it.category == ItemCategory::Scroll) {
+                    itemLine += "  (Teleports to Safe Tile)";
+                }
+
+                if (it.equipped) {
+                    SetTextColor(memDC, RGB(40, 230, 80)); // Green for equipped
+                    itemLine += "   [EQUIPPED]";
+                } else {
+                    SetTextColor(memDC, RGB(220, 225, 235));
+                }
+
+                TextOutA(memDC, modalX + 30, itemY, itemLine.c_str(), static_cast<int>(itemLine.size()));
+                itemY += 23;
+            }
+        }
+
+        // Footer instructions
+        SetTextColor(memDC, RGB(140, 200, 240));
+        std::string foot = "Press [1-9] to Use/Equip  |  [Shift + 1-9] to Drop  |  [I / ESC] Close";
+        RECT rFoot = { modalX, modalY + modalH - 30, modalX + modalW, modalY + modalH - 8 };
+        DrawTextA(memDC, foot.c_str(), static_cast<int>(foot.size()), &rFoot, DT_CENTER | DT_SINGLELINE);
+
+        DeleteObject(hbrModalBg);
+        DeleteObject(hpenModalBorder);
+    }
+
+    // 7. Game Over / Victory Overlay
     if (m_gameOver || m_victory) {
         int bannerW = 460;
         int bannerH = 110;
@@ -1299,6 +1710,9 @@ void Engine::renderGui(void* hdcVoid, int width, int height) {
     DeleteObject(hpenStairsDim);
 
     DeleteObject(hbrPotion);
+    DeleteObject(hbrWeapon);
+    DeleteObject(hbrArmor);
+    DeleteObject(hbrScroll);
     DeleteObject(hbrGold);
 
     DeleteObject(hbrGoblin);
