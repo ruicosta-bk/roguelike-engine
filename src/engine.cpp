@@ -729,3 +729,599 @@ void Engine::runHeadless(int maxTicks, unsigned int seed) {
         }
     }
 }
+
+// =========================================================================
+// Native Win32 GDI 2D Tile GUI Implementation
+// =========================================================================
+
+#ifdef _WIN32
+
+static LRESULT CALLBACK GuiWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    Engine* engine = reinterpret_cast<Engine*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
+
+    switch (msg) {
+        case WM_NCCREATE: {
+            CREATESTRUCT* cs = reinterpret_cast<CREATESTRUCT*>(lParam);
+            SetWindowLongPtr(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(cs->lpCreateParams));
+            return DefWindowProc(hwnd, msg, wParam, lParam);
+        }
+
+        case WM_ERASEBKGND:
+            return 1; // Double buffering handled in WM_PAINT
+
+        case WM_PAINT: {
+            PAINTSTRUCT ps;
+            HDC hdc = BeginPaint(hwnd, &ps);
+            if (engine) {
+                RECT rc;
+                GetClientRect(hwnd, &rc);
+                int w = rc.right - rc.left;
+                int h = rc.bottom - rc.top;
+
+                HDC memDC = CreateCompatibleDC(hdc);
+                HBITMAP memBmp = CreateCompatibleBitmap(hdc, w, h);
+                HBITMAP oldBmp = static_cast<HBITMAP>(SelectObject(memDC, memBmp));
+
+                engine->renderGui(memDC, w, h);
+
+                BitBlt(hdc, 0, 0, w, h, memDC, 0, 0, SRCCOPY);
+
+                SelectObject(memDC, oldBmp);
+                DeleteObject(memBmp);
+                DeleteDC(memDC);
+            }
+            EndPaint(hwnd, &ps);
+            return 0;
+        }
+
+        case WM_KEYDOWN: {
+            if (!engine) break;
+            bool handled = false;
+            switch (wParam) {
+                case VK_ESCAPE:
+                case 'Q':
+                    DestroyWindow(hwnd);
+                    handled = true;
+                    break;
+                case 'R':
+                    engine->restart();
+                    handled = true;
+                    break;
+                case 'W':
+                case VK_UP:
+                    engine->stepPlayer(0, -1);
+                    handled = true;
+                    break;
+                case 'S':
+                case VK_DOWN:
+                    engine->stepPlayer(0, 1);
+                    handled = true;
+                    break;
+                case 'A':
+                case VK_LEFT:
+                    engine->stepPlayer(-1, 0);
+                    handled = true;
+                    break;
+                case 'D':
+                case VK_RIGHT:
+                    engine->stepPlayer(1, 0);
+                    handled = true;
+                    break;
+                case VK_SPACE:
+                    engine->waitTurn();
+                    handled = true;
+                    break;
+                case VK_OEM_PERIOD:
+                    if (GetKeyState(VK_SHIFT) & 0x8000) {
+                        engine->descendStairs();
+                    } else {
+                        engine->waitTurn();
+                    }
+                    handled = true;
+                    break;
+                default:
+                    break;
+            }
+            if (handled) {
+                InvalidateRect(hwnd, NULL, FALSE);
+            }
+            return 0;
+        }
+
+        case WM_CHAR: {
+            if (!engine) break;
+            bool handled = false;
+            if (wParam == '>') {
+                engine->descendStairs();
+                handled = true;
+            } else if (wParam == '.') {
+                engine->waitTurn();
+                handled = true;
+            } else if (wParam == 'r' || wParam == 'R') {
+                engine->restart();
+                handled = true;
+            } else if (wParam == 'q' || wParam == 'Q') {
+                DestroyWindow(hwnd);
+                handled = true;
+            }
+            if (handled) {
+                InvalidateRect(hwnd, NULL, FALSE);
+            }
+            return 0;
+        }
+
+        case WM_DESTROY:
+            PostQuitMessage(0);
+            return 0;
+
+        default:
+            break;
+    }
+    return DefWindowProc(hwnd, msg, wParam, lParam);
+}
+
+#endif // _WIN32
+
+void Engine::runGui() {
+#ifdef _WIN32
+    WNDCLASSEX wc{};
+    wc.cbSize = sizeof(WNDCLASSEX);
+    wc.style = CS_HREDRAW | CS_VREDRAW;
+    wc.lpfnWndProc = GuiWndProc;
+    wc.hInstance = GetModuleHandle(NULL);
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wc.hbrBackground = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
+    wc.lpszClassName = "RoguelikeEngineGuiClass";
+
+    RegisterClassEx(&wc);
+
+    const int TILE_SIZE = 14;
+    const int CLIENT_WIDTH = 80 * TILE_SIZE; // 1120
+    const int CLIENT_HEIGHT = 25 * TILE_SIZE + 170; // 520
+
+    RECT rc = { 0, 0, CLIENT_WIDTH, CLIENT_HEIGHT };
+    AdjustWindowRect(&rc, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, FALSE);
+    int winWidth = rc.right - rc.left;
+    int winHeight = rc.bottom - rc.top;
+
+    HWND hwnd = CreateWindowEx(
+        0,
+        "RoguelikeEngineGuiClass",
+        "Roguelike Dungeon - 2D Native Win32 GUI",
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
+        CW_USEDEFAULT, CW_USEDEFAULT,
+        winWidth, winHeight,
+        NULL, NULL, GetModuleHandle(NULL), this
+    );
+
+    if (!hwnd) {
+        std::cerr << "Failed to create Win32 window, falling back to CLI.\n";
+        runInteractive();
+        return;
+    }
+
+    ShowWindow(hwnd, SW_SHOW);
+    UpdateWindow(hwnd);
+
+    MSG msg;
+    while (GetMessage(&msg, NULL, 0, 0)) {
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
+    }
+#else
+    runInteractive();
+#endif
+}
+
+void Engine::renderGui(void* hdcVoid, int width, int height) {
+#ifdef _WIN32
+    HDC memDC = static_cast<HDC>(hdcVoid);
+
+    // 1. Clear whole window
+    HBRUSH bgBrush = CreateSolidBrush(RGB(10, 10, 14));
+    RECT rcAll = { 0, 0, width, height };
+    FillRect(memDC, &rcAll, bgBrush);
+    DeleteObject(bgBrush);
+
+    // Fonts
+    HFONT hFontRegular = CreateFontA(
+        14, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, "Consolas"
+    );
+    HFONT hFontTile = CreateFontA(
+        11, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, "Consolas"
+    );
+    HFONT hFontBanner = CreateFontA(
+        26, 0, 0, 0, FW_HEAVY, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, "Consolas"
+    );
+
+    // Tile pens and brushes
+    HBRUSH hbrFloorVis = CreateSolidBrush(RGB(50, 50, 55));
+    HBRUSH hbrFloorDim = CreateSolidBrush(RGB(22, 22, 25));
+
+    HBRUSH hbrWallCenterVis = CreateSolidBrush(RGB(75, 80, 90));
+    HBRUSH hbrWallCenterDim = CreateSolidBrush(RGB(32, 34, 38));
+    HPEN hpenLightBevelVis = CreatePen(PS_SOLID, 1, RGB(130, 138, 150));
+    HPEN hpenLightBevelDim = CreatePen(PS_SOLID, 1, RGB(55, 58, 65));
+    HPEN hpenDarkBevelVis = CreatePen(PS_SOLID, 1, RGB(35, 38, 45));
+    HPEN hpenDarkBevelDim = CreatePen(PS_SOLID, 1, RGB(16, 17, 20));
+
+    HBRUSH hbrDoorVis = CreateSolidBrush(RGB(160, 90, 44));
+    HBRUSH hbrDoorDim = CreateSolidBrush(RGB(70, 40, 20));
+    HPEN hpenDoorFrame = CreatePen(PS_SOLID, 1, RGB(90, 45, 18));
+
+    HPEN hpenStairsVis = CreatePen(PS_SOLID, 2, RGB(40, 215, 215));
+    HPEN hpenStairsDim = CreatePen(PS_SOLID, 2, RGB(18, 90, 90));
+
+    HBRUSH hbrGreen = CreateSolidBrush(RGB(40, 220, 70));
+    HBRUSH hbrYellow = CreateSolidBrush(RGB(230, 200, 40));
+    HBRUSH hbrRed = CreateSolidBrush(RGB(220, 40, 40));
+    HBRUSH hbrDarkRed = CreateSolidBrush(RGB(70, 15, 15));
+    HBRUSH hbrExpBg = CreateSolidBrush(RGB(35, 35, 45));
+    HBRUSH hbrExpFg = CreateSolidBrush(RGB(170, 70, 245));
+
+    HPEN hpenNull = static_cast<HPEN>(GetStockObject(NULL_PEN));
+
+    const int TILE_SIZE = 14;
+    int mapW = m_map.getWidth();
+    int mapH = m_map.getHeight();
+
+    // 2. Render Map Tiles
+    for (int y = 0; y < mapH; ++y) {
+        for (int x = 0; x < mapW; ++x) {
+            bool visible = m_fow.isVisible(x, y);
+            bool explored = m_fow.isExplored(x, y);
+
+            if (!explored) {
+                continue; // Pitch black
+            }
+
+            int px = x * TILE_SIZE;
+            int py = y * TILE_SIZE;
+            RECT rTile = { px, py, px + TILE_SIZE, py + TILE_SIZE };
+            TileType t = m_map.getTile(x, y);
+
+            if (t == TileType::Wall) {
+                // 3D Beveled Stone Wall
+                FillRect(memDC, &rTile, visible ? hbrWallCenterVis : hbrWallCenterDim);
+
+                HPEN hpenLight = visible ? hpenLightBevelVis : hpenLightBevelDim;
+                HPEN hpenDark = visible ? hpenDarkBevelVis : hpenDarkBevelDim;
+
+                HPEN oldPen = static_cast<HPEN>(SelectObject(memDC, hpenLight));
+                MoveToEx(memDC, px, py, NULL);
+                LineTo(memDC, px + TILE_SIZE, py);
+                MoveToEx(memDC, px, py, NULL);
+                LineTo(memDC, px, py + TILE_SIZE);
+
+                SelectObject(memDC, hpenDark);
+                MoveToEx(memDC, px, py + TILE_SIZE - 1, NULL);
+                LineTo(memDC, px + TILE_SIZE, py + TILE_SIZE - 1);
+                MoveToEx(memDC, px + TILE_SIZE - 1, py, NULL);
+                LineTo(memDC, px + TILE_SIZE - 1, py + TILE_SIZE);
+
+                SelectObject(memDC, oldPen);
+            } else if (t == TileType::Floor) {
+                FillRect(memDC, &rTile, visible ? hbrFloorVis : hbrFloorDim);
+                SetPixel(memDC, px + TILE_SIZE / 2, py + TILE_SIZE / 2,
+                         visible ? RGB(70, 70, 75) : RGB(30, 30, 35));
+            } else if (t == TileType::DoorClosed) {
+                FillRect(memDC, &rTile, visible ? hbrDoorVis : hbrDoorDim);
+                HPEN oldPen = static_cast<HPEN>(SelectObject(memDC, hpenDoorFrame));
+                MoveToEx(memDC, px, py, NULL);
+                LineTo(memDC, px, py + TILE_SIZE);
+                MoveToEx(memDC, px + TILE_SIZE - 1, py, NULL);
+                LineTo(memDC, px + TILE_SIZE - 1, py + TILE_SIZE);
+                SelectObject(memDC, oldPen);
+                if (visible) {
+                    SetPixel(memDC, px + TILE_SIZE / 2 + 1, py + TILE_SIZE / 2, RGB(220, 180, 50));
+                }
+            } else if (t == TileType::DoorOpen) {
+                FillRect(memDC, &rTile, visible ? hbrFloorVis : hbrFloorDim);
+                HPEN oldPen = static_cast<HPEN>(SelectObject(memDC, visible ? hpenLightBevelVis : hpenLightBevelDim));
+                MoveToEx(memDC, px + 2, py + 2, NULL);
+                LineTo(memDC, px + TILE_SIZE - 2, py + 4);
+                SelectObject(memDC, oldPen);
+            } else if (t == TileType::StairsDown) {
+                FillRect(memDC, &rTile, visible ? hbrFloorVis : hbrFloorDim);
+                HPEN oldPen = static_cast<HPEN>(SelectObject(memDC, visible ? hpenStairsVis : hpenStairsDim));
+                MoveToEx(memDC, px + 2, py + 3, NULL);
+                LineTo(memDC, px + TILE_SIZE - 2, py + 3);
+                MoveToEx(memDC, px + 4, py + 7, NULL);
+                LineTo(memDC, px + TILE_SIZE - 4, py + 7);
+                MoveToEx(memDC, px + 6, py + 11, NULL);
+                LineTo(memDC, px + TILE_SIZE - 6, py + 11);
+                SelectObject(memDC, oldPen);
+            }
+        }
+    }
+
+    // 3. Render Consumable Items (Potions)
+    HBRUSH hbrPotion = CreateSolidBrush(RGB(220, 40, 130));
+    HBRUSH hbrGold = CreateSolidBrush(RGB(220, 175, 50));
+
+    for (const auto& item : m_items) {
+        if (!item.pickedUp && m_fow.isVisible(item.pos.x, item.pos.y)) {
+            int ix = item.pos.x * TILE_SIZE;
+            int iy = item.pos.y * TILE_SIZE;
+
+            HPEN oldPen = static_cast<HPEN>(SelectObject(memDC, hpenNull));
+            HBRUSH oldBrush = static_cast<HBRUSH>(SelectObject(memDC, hbrPotion));
+            Ellipse(memDC, ix + 2, iy + 4, ix + TILE_SIZE - 2, iy + TILE_SIZE);
+
+            SelectObject(memDC, hbrGold);
+            RECT rCork = { ix + 5, iy + 1, ix + TILE_SIZE - 5, iy + 4 };
+            FillRect(memDC, &rCork, hbrGold);
+
+            SetPixel(memDC, ix + 4, iy + 6, RGB(255, 180, 220));
+
+            SelectObject(memDC, oldBrush);
+            SelectObject(memDC, oldPen);
+        }
+    }
+
+    // 4. Render Entities
+    HBRUSH hbrGoblin = CreateSolidBrush(RGB(40, 180, 80));
+    HBRUSH hbrSkeleton = CreateSolidBrush(RGB(230, 230, 220));
+    HBRUSH hbrOrc = CreateSolidBrush(RGB(190, 40, 40));
+    HBRUSH hbrDragon = CreateSolidBrush(RGB(245, 30, 30));
+    HPEN hpenDarkEntity = CreatePen(PS_SOLID, 1, RGB(15, 15, 20));
+
+    SetBkMode(memDC, TRANSPARENT);
+    HFONT oldFont = static_cast<HFONT>(SelectObject(memDC, hFontTile));
+
+    // Monsters
+    for (const auto& m : m_monsters) {
+        if (m.isAlive() && m_fow.isVisible(m.pos.x, m.pos.y)) {
+            int mx = m.pos.x * TILE_SIZE;
+            int my = m.pos.y * TILE_SIZE;
+
+            HBRUSH hbrMonster = hbrGoblin;
+            COLORREF txtColor = RGB(255, 255, 255);
+            if (m.name == "Skeleton") {
+                hbrMonster = hbrSkeleton;
+                txtColor = RGB(30, 30, 30);
+            } else if (m.name == "Orc") {
+                hbrMonster = hbrOrc;
+            } else if (m.name == "Dragon") {
+                hbrMonster = hbrDragon;
+            }
+
+            HPEN oldPen = static_cast<HPEN>(SelectObject(memDC, hpenDarkEntity));
+            HBRUSH oldBrush = static_cast<HBRUSH>(SelectObject(memDC, hbrMonster));
+            Ellipse(memDC, mx + 1, my + 1, mx + TILE_SIZE - 1, my + TILE_SIZE - 1);
+            SelectObject(memDC, oldBrush);
+            SelectObject(memDC, oldPen);
+
+            SetTextColor(memDC, txtColor);
+            char sym[2] = { m.symbol, '\0' };
+            RECT rSym = { mx, my, mx + TILE_SIZE, my + TILE_SIZE };
+            DrawTextA(memDC, sym, 1, &rSym, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+            // Mini HP Bar above head if damaged
+            if (m.hp < m.maxHp) {
+                int barW = TILE_SIZE;
+                int barH = 2;
+                int barX = mx;
+                int barY = my - 3;
+                RECT rBg = { barX, barY, barX + barW, barY + barH };
+                FillRect(memDC, &rBg, hbrDarkRed);
+                int curW = std::max(1, (m.hp * barW) / m.maxHp);
+                RECT rFg = { barX, barY, barX + curW, barY + barH };
+                FillRect(memDC, &rFg, hbrGreen);
+            }
+        }
+    }
+
+    // Player Avatar
+    int px = m_player.pos.x * TILE_SIZE;
+    int py = m_player.pos.y * TILE_SIZE;
+
+    HBRUSH hbrPlayer = CreateSolidBrush(RGB(30, 120, 255)); // Royal blue
+    HPEN hpenPlayerGlow = CreatePen(PS_SOLID, 2, RGB(255, 215, 0)); // Golden glowing border
+
+    HPEN oldPenP = static_cast<HPEN>(SelectObject(memDC, hpenPlayerGlow));
+    HBRUSH oldBrushP = static_cast<HBRUSH>(SelectObject(memDC, hbrPlayer));
+    Ellipse(memDC, px + 1, py + 1, px + TILE_SIZE - 1, py + TILE_SIZE - 1);
+    SelectObject(memDC, oldBrushP);
+    SelectObject(memDC, oldPenP);
+
+    SetTextColor(memDC, RGB(255, 240, 100));
+    RECT rPlayerSym = { px, py, px + TILE_SIZE, py + TILE_SIZE };
+    DrawTextA(memDC, "@", 1, &rPlayerSym, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+    // Mini HP Bar directly above player
+    {
+        int barW = TILE_SIZE;
+        int barH = 3;
+        int barX = px;
+        int barY = py - 4;
+        RECT rBg = { barX, barY, barX + barW, barY + barH };
+        FillRect(memDC, &rBg, hbrDarkRed);
+        int curW = std::max(0, (m_player.hp * barW) / m_player.maxHp);
+        RECT rFg = { barX, barY, barX + curW, barY + barH };
+        HBRUSH curHpBr = (m_player.hp > m_player.maxHp / 2) ? hbrGreen :
+                         ((m_player.hp > m_player.maxHp / 4) ? hbrYellow : hbrRed);
+        FillRect(memDC, &rFg, curHpBr);
+    }
+
+    // 5. Sleek Bottom HUD
+    int hudY = mapH * TILE_SIZE;
+    HBRUSH hbrHudBg = CreateSolidBrush(RGB(20, 22, 28));
+    RECT rHud = { 0, hudY, width, height };
+    FillRect(memDC, &rHud, hbrHudBg);
+
+    // Accent line divider
+    HPEN hpenAccent = CreatePen(PS_SOLID, 2, RGB(45, 110, 210));
+    HPEN oldPenHud = static_cast<HPEN>(SelectObject(memDC, hpenAccent));
+    MoveToEx(memDC, 0, hudY, NULL);
+    LineTo(memDC, width, hudY);
+
+    MoveToEx(memDC, 540, hudY + 8, NULL);
+    LineTo(memDC, 540, height - 8);
+    SelectObject(memDC, oldPenHud);
+
+    SelectObject(memDC, hFontRegular);
+
+    // Left Column: Stats
+    SetTextColor(memDC, RGB(100, 220, 255));
+    std::string s1 = "Floor: " + std::to_string(m_floor) +
+                     "   |   Turn: " + std::to_string(m_turnCount) +
+                     "   |   Level: " + std::to_string(m_playerLevel);
+    TextOutA(memDC, 20, hudY + 12, s1.c_str(), static_cast<int>(s1.size()));
+
+    // EXP Bar
+    SetTextColor(memDC, RGB(200, 160, 255));
+    std::string sExp = "EXP: " + std::to_string(m_playerExp) + " / " + std::to_string(m_playerExpToNext);
+    TextOutA(memDC, 20, hudY + 36, sExp.c_str(), static_cast<int>(sExp.size()));
+
+    int expBarX = 180;
+    int expBarY = hudY + 38;
+    int expBarW = 140;
+    int expBarH = 10;
+    RECT rExpBg = { expBarX, expBarY, expBarX + expBarW, expBarY + expBarH };
+    FillRect(memDC, &rExpBg, hbrExpBg);
+    int expFilled = (m_playerExp * expBarW) / std::max(1, m_playerExpToNext);
+    expFilled = std::max(0, std::min(expBarW, expFilled));
+    RECT rExpFg = { expBarX, expBarY, expBarX + expFilled, expBarY + expBarH };
+    FillRect(memDC, &rExpFg, hbrExpFg);
+
+    // HP Bar
+    SetTextColor(memDC, RGB(255, 120, 120));
+    std::string sHp = "HP:  " + std::to_string(m_player.hp) + " / " + std::to_string(m_player.maxHp);
+    TextOutA(memDC, 20, hudY + 60, sHp.c_str(), static_cast<int>(sHp.size()));
+
+    int hpBarX = 180;
+    int hpBarY = hudY + 62;
+    int hpBarW = 180;
+    int hpBarH = 12;
+    RECT rHpBg = { hpBarX, hpBarY, hpBarX + hpBarW, hpBarY + hpBarH };
+    FillRect(memDC, &rHpBg, hbrDarkRed);
+    int hpFilled = (m_player.hp * hpBarW) / std::max(1, m_player.maxHp);
+    hpFilled = std::max(0, std::min(hpBarW, hpFilled));
+    RECT rHpFg = { hpBarX, hpBarY, hpBarX + hpFilled, hpBarY + hpBarH };
+    HBRUSH curHpBr = (m_player.hp > m_player.maxHp / 2) ? hbrGreen :
+                     ((m_player.hp > m_player.maxHp / 4) ? hbrYellow : hbrRed);
+    FillRect(memDC, &rHpFg, curHpBr);
+
+    // Attack & Defense
+    SetTextColor(memDC, RGB(220, 180, 100));
+    std::string sCombatStats = "Attack: " + std::to_string(m_player.attack) +
+                               "   |   Defense: " + std::to_string(m_player.defense);
+    TextOutA(memDC, 20, hudY + 86, sCombatStats.c_str(), static_cast<int>(sCombatStats.size()));
+
+    // Controls Hints
+    SetTextColor(memDC, RGB(140, 150, 165));
+    std::string c1 = "[WASD / Arrow Keys] Move & Attack   |   [Space / .] Rest (5 turns = +1 HP)";
+    TextOutA(memDC, 20, hudY + 112, c1.c_str(), static_cast<int>(c1.size()));
+    std::string c2 = "[>] Descend Stairs   |   [R] Quick Restart   |   [Q / ESC] Quit";
+    TextOutA(memDC, 20, hudY + 134, c2.c_str(), static_cast<int>(c2.size()));
+
+    // Right Column: Combat Log
+    SetTextColor(memDC, RGB(240, 200, 60));
+    std::string logHeader = "--- Recent Combat Events ---";
+    TextOutA(memDC, 560, hudY + 12, logHeader.c_str(), static_cast<int>(logHeader.size()));
+
+    int msgCount = static_cast<int>(m_messageLog.size());
+    int startIdx = std::max(0, msgCount - 5);
+    int logY = hudY + 36;
+    for (int i = startIdx; i < msgCount; ++i) {
+        if (i == msgCount - 1) {
+            SetTextColor(memDC, RGB(255, 255, 255));
+        } else {
+            SetTextColor(memDC, RGB(165, 170, 180));
+        }
+        std::string logLine = "> " + m_messageLog[static_cast<size_t>(i)];
+        TextOutA(memDC, 560, logY, logLine.c_str(), static_cast<int>(logLine.size()));
+        logY += 22;
+    }
+
+    // 6. Game Over / Victory Overlay
+    if (m_gameOver || m_victory) {
+        int bannerW = 460;
+        int bannerH = 110;
+        int bannerX = (width - bannerW) / 2;
+        int bannerY = 120;
+
+        HBRUSH hbrOverlayBg = CreateSolidBrush(m_gameOver ? RGB(35, 10, 12) : RGB(10, 35, 20));
+        HPEN hpenOverlayBorder = CreatePen(PS_SOLID, 3, m_gameOver ? RGB(230, 40, 40) : RGB(255, 215, 0));
+
+        HPEN oldP = static_cast<HPEN>(SelectObject(memDC, hpenOverlayBorder));
+        HBRUSH oldB = static_cast<HBRUSH>(SelectObject(memDC, hbrOverlayBg));
+        Rectangle(memDC, bannerX, bannerY, bannerX + bannerW, bannerY + bannerH);
+        SelectObject(memDC, oldB);
+        SelectObject(memDC, oldP);
+
+        SelectObject(memDC, hFontBanner);
+        SetTextColor(memDC, m_gameOver ? RGB(255, 60, 60) : RGB(255, 220, 50));
+        std::string title = m_gameOver ? "*** GAME OVER ***" : "*** VICTORY! ***";
+        RECT rTitle = { bannerX, bannerY + 14, bannerX + bannerW, bannerY + 50 };
+        DrawTextA(memDC, title.c_str(), static_cast<int>(title.size()), &rTitle, DT_CENTER | DT_SINGLELINE);
+
+        SelectObject(memDC, hFontRegular);
+        SetTextColor(memDC, RGB(240, 240, 240));
+        std::string subtext = m_gameOver ?
+            "You have fallen! Press [R] to Restart or [Q] to Quit." :
+            "You retrieved the Amulet and escaped! Press [R] to Restart.";
+        RECT rSub = { bannerX + 10, bannerY + 62, bannerX + bannerW - 10, bannerY + 95 };
+        DrawTextA(memDC, subtext.c_str(), static_cast<int>(subtext.size()), &rSub, DT_CENTER | DT_SINGLELINE);
+
+        DeleteObject(hbrOverlayBg);
+        DeleteObject(hpenOverlayBorder);
+    }
+
+    // Cleanup GDI Objects
+    SelectObject(memDC, oldFont);
+
+    DeleteObject(hFontRegular);
+    DeleteObject(hFontTile);
+    DeleteObject(hFontBanner);
+
+    DeleteObject(hbrFloorVis);
+    DeleteObject(hbrFloorDim);
+    DeleteObject(hbrWallCenterVis);
+    DeleteObject(hbrWallCenterDim);
+    DeleteObject(hpenLightBevelVis);
+    DeleteObject(hpenLightBevelDim);
+    DeleteObject(hpenDarkBevelVis);
+    DeleteObject(hpenDarkBevelDim);
+
+    DeleteObject(hbrDoorVis);
+    DeleteObject(hbrDoorDim);
+    DeleteObject(hpenDoorFrame);
+
+    DeleteObject(hpenStairsVis);
+    DeleteObject(hpenStairsDim);
+
+    DeleteObject(hbrPotion);
+    DeleteObject(hbrGold);
+
+    DeleteObject(hbrGoblin);
+    DeleteObject(hbrSkeleton);
+    DeleteObject(hbrOrc);
+    DeleteObject(hbrDragon);
+    DeleteObject(hpenDarkEntity);
+
+    DeleteObject(hbrPlayer);
+    DeleteObject(hpenPlayerGlow);
+
+    DeleteObject(hbrGreen);
+    DeleteObject(hbrYellow);
+    DeleteObject(hbrRed);
+    DeleteObject(hbrDarkRed);
+    DeleteObject(hbrExpBg);
+    DeleteObject(hbrExpFg);
+
+    DeleteObject(hbrHudBg);
+    DeleteObject(hpenAccent);
+#else
+    (void)hdcVoid;
+    (void)width;
+    (void)height;
+#endif
+}

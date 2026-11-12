@@ -37,8 +37,9 @@ public:
     void init(unsigned int seed = 1337);
     void restart();
 
-    // Interactive loop
-    void runInteractive();
+    // Interactive loops
+    void runInteractive(); // Terminal ANSI mode
+    void runGui();         // Native Win32 GDI 2D Tile GUI mode
 
     // Headless simulation mode
     void runHeadless(int maxTicks, unsigned int seed = 1337);
@@ -56,6 +57,7 @@ public:
     // Rendering
     void render() const;
     std::string renderToString() const;
+    void renderGui(void* hdc, int width, int height);
 
     // State inspection
     bool isRunning() const { return m_running; }

@@ -27,3 +27,8 @@ add_executable(headless_test
     src/ai.cpp
     src/engine.cpp
 )
+
+if(WIN32)
+    target_link_libraries(roguelike PRIVATE user32 gdi32)
+    target_link_libraries(headless_test PRIVATE user32 gdi32)
+endif()

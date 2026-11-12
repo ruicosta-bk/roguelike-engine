@@ -5,10 +5,14 @@
 
 int main(int argc, char* argv[]) {
     bool headless = false;
+    bool cli = false;
+
     for (int i = 1; i < argc; ++i) {
-        if (std::string(argv[i]) == "--headless") {
+        std::string arg = argv[i];
+        if (arg == "--headless") {
             headless = true;
-            break;
+        } else if (arg == "--cli") {
+            cli = true;
         }
     }
 
@@ -18,7 +22,14 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
+    if (cli) {
+        Engine engine;
+        engine.runInteractive();
+        return 0;
+    }
+
+    // Default: launch native 2D Win32 GUI window
     Engine engine;
-    engine.runInteractive();
+    engine.runGui();
     return 0;
 }
