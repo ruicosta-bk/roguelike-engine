@@ -57,6 +57,7 @@ Sau khi build thành công, trong thư mục `build/` sẽ tạo ra 2 file thự
 | Phím bấm | Hành động | Giải thích |
 | :--- | :--- | :--- |
 | **`W` / `A` / `S` / `D`** hoặc **Phím Mũi Tên** | **Di chuyển / Tấn công** | Đi theo 4 hướng. Đi đâm vào quái vật sẽ tự động ra đòn (*Bump Combat*). |
+| **`F`** | **Ngắm bắn tầm xa (Ranged Shoot)** | Bật chế độ ngắm bắn cung/phép. Tự động khóa quái vật gần nhất. Dùng `WASD`/Mũi tên/Chuột di tâm, nhấn `Enter`/`Space`/`F`/Click chuột trái để bắn! Nhấn `ESC` để hủy. |
 | **`Space`** hoặc **`.`** | **Nghỉ / Chờ lượt (Rest)** | Bỏ qua lượt đi để nhử quái lại gần. Khi an toàn (không có quái trong tầm nhìn), cứ **5 lượt nghỉ** sẽ **hồi 1 HP**. |
 | **`I`** | **Mở / Đóng Túi đồ (Inventory)** | Bật popup quản lý túi đồ và trang bị vũ khí, áo giáp, bình máu, cuộn giấy. |
 | **`Shift + .`** (ký tự **`>`**) | **Xuống cầu thang (Descend)** | Khi đứng trên ô cầu thang `>` dẫn xuống tầng dưới, nhấn tổ hợp này để sang tầng tiếp theo. |
@@ -91,11 +92,29 @@ Sau khi build thành công, trong thư mục `build/` sẽ tạo ra 2 file thự
   - **Vùng đã khám phá (Explored)**: Hiển thị mờ xám giúp bạn ghi nhớ địa hình đã đi qua nhưng không thấy được quái vật đang di chuyển trong đó.
   - **Vùng trong tầm mắt (Visible)**: Chiếu sáng rõ nét với đầy đủ màu sắc, hiển thị quái vật và vật phẩm thời gian thực.
 
-### 3. Trí tuệ nhân tạo quái vật (A* Monster AI)
-- Quái vật sở hữu thuật toán tìm đường **A\* (A-Star)** với hàm ước lượng khoảng cách Manhattan.
-- Khi người chơi bước vào tầm nhìn hoặc phạm vi kích động của quái, chúng sẽ tự động tính toán lộ trình ngắn nhất vượt qua mê cung, né tường và né các quái vật khác để tiếp cận và bao vây bạn.
+### 3. Trí tuệ nhân tạo quái vật & Phân lớp hành vi (AI Archetypes)
+Quái vật không còn chỉ biết lao thẳng vào người chơi mà được phân loại theo các Archetype chiến thuật riêng biệt:
+- 🏹 **Cung thủ (Skeleton Archer - `a`)**:
+  - Tự động duy trì khoảng cách tầm xa từ **3 đến 5 ô**.
+  - Nếu người chơi áp sát lại gần ($\le 2$ ô), cung thủ sẽ **tìm đường lùi lại (Kiting)** để giữ khoảng cách an toàn.
+  - Khi có đường ngắm thẳng không bị tường cản (Line of Sight), nó sẽ **bắn tên xuyên tầm nhìn** gây sát thương tầm xa cho bạn!
+- 🗡️ **Thích khách (Goblin Rogue - `g`)**:
+  - Săn lùng và tấn công người chơi khi khỏe mạnh.
+  - Khi lượng máu tụt xuống $\le 50\%$, nó sẽ **bỏ chạy và tìm đường rút lui** để bảo toàn sinh mạng.
+- 🛡️ **Chiến binh cận chiến (Orc Warrior - `o`, Dragon - `D`)**:
+  - Dùng thuật toán **A\*** né chướng ngại vật và quái khác để áp sát tấn công dũng mãnh.
 
-### 4. Cơ chế Chiến đấu & Tính sát thương (Bump Combat)
+### 4. Cơ chế Ngắm bắn tầm xa của người chơi (Ranged Targeting Mode - `F`)
+- Nhấn phím **`F`** bất kỳ lúc nào để bật chế độ ngắm bắn cung tên/phép thuật:
+  - **Tự động bắt mục tiêu**: Hồng tâm tự động khóa vào quái vật gần nhất trong tầm nhìn.
+  - **Di chuyển tâm ngắm**: Dùng các phím `WASD`, phím mũi tên hoặc rê chuột trực tiếp đến ô mục tiêu.
+  - **Đường dẫn hướng trực quan**:
+    - Đường ngắm hiển thị **màu Xanh Cyan**: Phát bắn hợp lệ (trong tầm bắn 6 ô và không bị tường cản).
+    - Đường ngắm hiển thị **màu Đỏ**: Bị tường chắn hoặc vượt quá tầm bắn tối đa 6 ô.
+  - **Khai hỏa**: Nhấn **`Enter`**, **`Space`**, **`F`** hoặc **Click chuột trái** để bắn tên tiêu diệt quái vật từ xa!
+  - **Hủy ngắm**: Nhấn **`ESC`** hoặc Click chuột phải để quay lại di chuyển.
+
+### 5. Cơ chế Chiến đấu Cận chiến & Tính sát thương (Bump Combat)
 - Đơn giản và trực quan: Chỉ cần di chuyển đâm thẳng vào ô của quái vật để tấn công.
 - **Công thức tính sát thương**:
   $$\text{Damage} = \max(1, \text{Attack}_{\text{Player}} - \text{Defense}_{\text{Monster}})$$
