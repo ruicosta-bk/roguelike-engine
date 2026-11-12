@@ -37,6 +37,7 @@ struct Entity {
     int maxHp{10};
     int attack{3};
     int defense{1};
+    MonsterArchetype archetype{MonsterArchetype::Melee};
     bool isAlive() const { return hp > 0; }
 };
 
@@ -79,6 +80,16 @@ public:
     bool useOrEquipSelectedItem();
     bool dropSelectedItem();
     void handleInventoryClick(int mouseX, int mouseY, bool rightClick);
+
+    // Ranged combat & Targeting
+    bool isTargetingMode() const { return m_targetingMode; }
+    void setTargetingMode(bool mode) { m_targetingMode = mode; }
+    void toggleTargetingMode();
+    Point getTargetCursor() const { return m_targetCursor; }
+    void setTargetCursor(Point pt) { m_targetCursor = pt; }
+    void moveTargetCursor(int dx, int dy);
+    bool shootAtTarget();
+    bool shootAt(Point target);
 
     int getTotalPlayerAttack() const;
     int getTotalPlayerDefense() const;
@@ -127,6 +138,8 @@ private:
     bool m_gameOver{false};
     bool m_victory{false};
     bool m_inventoryOpen{false};
+    bool m_targetingMode{false};
+    Point m_targetCursor{0, 0};
     size_t m_inventorySelectedIndex{0};
     int m_turnCount{0};
     int m_floor{1};

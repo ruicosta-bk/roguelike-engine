@@ -71,34 +71,64 @@ public:
     );
 };
 
+// Monster Archetypes
+enum class MonsterArchetype {
+    Melee,
+    Ranged,
+    Skirmisher
+};
+
 // AI Action definitions
 enum class AIActionType {
     Idle,
     Move,
-    Attack
+    Attack,
+    RangedAttack
 };
 
 struct AIAction {
     AIActionType type{AIActionType::Idle};
-    Point targetPos{0, 0}; // If Move: adjacent tile to step onto. If Attack: target's tile.
+    Point targetPos{0, 0}; // If Move: adjacent tile to step onto. If Attack / RangedAttack: target's tile.
 };
 
 // Monster AI decision helper
 struct MonsterAI {
-    // Determines monster's next action:
-    // - If target is adjacent, return Attack.
-    // - If target is within visionRange (and optionally visible / reachable), chase using Pathfinding.
-    // - Otherwise return Idle.
+    // Determines monster's next action based on archetype, distance, HP, and line of sight:
+    // - Melee: If adjacent -> Attack; else A* pathfind chase.
+    // - Ranged: If dist <= minRangedDist -> kite/flee away; else if dist <= maxRangedDist and has LOS -> RangedAttack; else A* chase.
+    // - Skirmisher: If curHp <= maxHp / 2 -> kite/flee away; else standard pursuit and melee attack.
     static AIAction decideAction(
         const Map& map,
         Point monsterPos,
         Point targetPos,
         const std::vector<Point>& blockers = {},
         int visionRange = 8,
-        bool requireLineOfSight = false,
+        MonsterArchetype archetype = MonsterArchetype::Melee,
+        int curHp = 10,
+        int maxHp = 10,
+        int minRangedDist = 2,
+        int maxRangedDist = 5
+    );
+
+    // Backward-compatibility overload for legacy 6/7-param callers
+    static AIAction decideAction(
+        const Map& map,
+        Point monsterPos,
+        Point targetPos,
+        const std::vector<Point>& blockers,
+        int visionRange,
+        bool requireLineOfSight,
         bool allowDiagonal = false
     );
 
     // Checks adjacency between two points
     static bool isAdjacent(Point a, Point b, bool allowDiagonal = false);
+
+    // Helper to find a walkable, unblocked adjacent step that moves further away from targetPos
+    static Point findFleeStep(
+        const Map& map,
+        Point monsterPos,
+        Point targetPos,
+        const std::vector<Point>& blockers = {}
+    );
 };

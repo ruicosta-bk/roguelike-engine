@@ -280,6 +280,154 @@ bool MonsterAI::isAdjacent(Point a, Point b, bool allowDiagonal) {
     }
 }
 
+Point MonsterAI::findFleeStep(
+    const Map& map,
+    Point monsterPos,
+    Point targetPos,
+    const std::vector<Point>& blockers
+) {
+    int curDistChebyshev = std::max(std::abs(monsterPos.x - targetPos.x), std::abs(monsterPos.y - targetPos.y));
+    int curDistSq = (monsterPos.x - targetPos.x) * (monsterPos.x - targetPos.x) + 
+                    (monsterPos.y - targetPos.y) * (monsterPos.y - targetPos.y);
+
+    int bestDistSq = curDistSq;
+    int bestDistChebyshev = curDistChebyshev;
+    Point bestTile = monsterPos;
+    bool found = false;
+
+    static const int DX[4] = { 0, 0, 1, -1 };
+    static const int DY[4] = { -1, 1, 0, 0 };
+
+    for (int d = 0; d < 4; ++d) {
+        int nx = monsterPos.x + DX[d];
+        int ny = monsterPos.y + DY[d];
+        Point next{ nx, ny };
+
+        if (!map.isInBounds(nx, ny)) continue;
+        if (!map.isWalkable(nx, ny)) continue;
+        if (next == targetPos) continue;
+
+        // Blocker check
+        bool isBlocked = false;
+        for (const auto& b : blockers) {
+            if (b == next) {
+                isBlocked = true;
+                break;
+            }
+        }
+        if (isBlocked) continue;
+
+        int newDistChebyshev = std::max(std::abs(nx - targetPos.x), std::abs(ny - targetPos.y));
+        int newDistSq = (nx - targetPos.x) * (nx - targetPos.x) + (ny - targetPos.y) * (ny - targetPos.y);
+
+        // Prefer neighbor that strictly increases distance from target
+        if (newDistChebyshev > bestDistChebyshev || 
+           (newDistChebyshev == bestDistChebyshev && newDistSq > bestDistSq)) {
+            bestDistChebyshev = newDistChebyshev;
+            bestDistSq = newDistSq;
+            bestTile = next;
+            found = true;
+        }
+    }
+
+    if (found) {
+        return bestTile;
+    }
+    return monsterPos;
+}
+
+AIAction MonsterAI::decideAction(
+    const Map& map,
+    Point monsterPos,
+    Point targetPos,
+    const std::vector<Point>& blockers,
+    int visionRange,
+    MonsterArchetype archetype,
+    int curHp,
+    int maxHp,
+    int minRangedDist,
+    int maxRangedDist
+) {
+    int distChebyshev = std::max(std::abs(monsterPos.x - targetPos.x), std::abs(monsterPos.y - targetPos.y));
+    int distSq = (monsterPos.x - targetPos.x) * (monsterPos.x - targetPos.x) + 
+                 (monsterPos.y - targetPos.y) * (monsterPos.y - targetPos.y);
+
+    // Target is out of vision threshold
+    if (distSq > visionRange * visionRange && distChebyshev > visionRange) {
+        return AIAction{ AIActionType::Idle, monsterPos };
+    }
+
+    // 1. Ranged Archetype (e.g. Skeleton Archer)
+    if (archetype == MonsterArchetype::Ranged) {
+        // Close range: kite / retreat away
+        if (distChebyshev <= minRangedDist) {
+            Point fleeStep = findFleeStep(map, monsterPos, targetPos, blockers);
+            if (fleeStep != monsterPos) {
+                return AIAction{ AIActionType::Move, fleeStep };
+            }
+            // Trapped and cannot retreat
+            if (LineOfSight::hasLineOfSight(map, monsterPos, targetPos)) {
+                return AIAction{ AIActionType::RangedAttack, targetPos };
+            }
+            if (isAdjacent(monsterPos, targetPos)) {
+                return AIAction{ AIActionType::Attack, targetPos };
+            }
+            return AIAction{ AIActionType::Idle, monsterPos };
+        }
+        // Optimal shooting range with line of sight
+        else if (distChebyshev <= maxRangedDist && LineOfSight::hasLineOfSight(map, monsterPos, targetPos)) {
+            return AIAction{ AIActionType::RangedAttack, targetPos };
+        }
+        // Out of max shooting range or obstructed LOS: pathfind chase
+        else {
+            auto path = Pathfinding::findPath(map, monsterPos, targetPos, blockers, false);
+            if (!path.empty()) {
+                return AIAction{ AIActionType::Move, path[0] };
+            }
+            return AIAction{ AIActionType::Idle, monsterPos };
+        }
+    }
+
+    // 2. Skirmisher Archetype (e.g. Goblin Rogue)
+    if (archetype == MonsterArchetype::Skirmisher) {
+        // Low HP (<= 50%): retreat
+        if (curHp <= maxHp / 2) {
+            Point fleeStep = findFleeStep(map, monsterPos, targetPos, blockers);
+            if (fleeStep != monsterPos) {
+                return AIAction{ AIActionType::Move, fleeStep };
+            }
+            // Trapped: fight if adjacent
+            if (isAdjacent(monsterPos, targetPos)) {
+                return AIAction{ AIActionType::Attack, targetPos };
+            }
+            return AIAction{ AIActionType::Idle, monsterPos };
+        }
+
+        // Healthy: standard pursuit and melee attack
+        if (isAdjacent(monsterPos, targetPos)) {
+            return AIAction{ AIActionType::Attack, targetPos };
+        }
+
+        auto path = Pathfinding::findPath(map, monsterPos, targetPos, blockers, false);
+        if (!path.empty()) {
+            return AIAction{ AIActionType::Move, path[0] };
+        }
+        return AIAction{ AIActionType::Idle, monsterPos };
+    }
+
+    // 3. Melee Archetype (e.g. Orc Warrior, Dragon)
+    if (isAdjacent(monsterPos, targetPos)) {
+        return AIAction{ AIActionType::Attack, targetPos };
+    }
+
+    auto path = Pathfinding::findPath(map, monsterPos, targetPos, blockers, false);
+    if (!path.empty()) {
+        return AIAction{ AIActionType::Move, path[0] };
+    }
+
+    return AIAction{ AIActionType::Idle, monsterPos };
+}
+
 AIAction MonsterAI::decideAction(
     const Map& map,
     Point monsterPos,
@@ -289,27 +437,18 @@ AIAction MonsterAI::decideAction(
     bool requireLineOfSight,
     bool allowDiagonal
 ) {
-    if (isAdjacent(monsterPos, targetPos, allowDiagonal)) {
-        return AIAction{ AIActionType::Attack, targetPos };
-    }
-
-    int dx = monsterPos.x - targetPos.x;
-    int dy = monsterPos.y - targetPos.y;
-    int distSq = dx * dx + dy * dy;
-    int visionSq = visionRange * visionRange;
-
-    if (distSq > visionSq) {
-        return AIAction{ AIActionType::Idle, monsterPos };
-    }
-
-    if (requireLineOfSight && !LineOfSight::hasLineOfSight(map, monsterPos, targetPos)) {
-        return AIAction{ AIActionType::Idle, monsterPos };
-    }
-
-    auto path = Pathfinding::findPath(map, monsterPos, targetPos, blockers, allowDiagonal);
-    if (!path.empty()) {
-        return AIAction{ AIActionType::Move, path[0] };
-    }
-
-    return AIAction{ AIActionType::Idle, monsterPos };
+    (void)requireLineOfSight;
+    (void)allowDiagonal;
+    return decideAction(
+        map,
+        monsterPos,
+        targetPos,
+        blockers,
+        visionRange,
+        MonsterArchetype::Melee,
+        10,
+        10,
+        2,
+        5
+    );
 }

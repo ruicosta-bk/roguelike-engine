@@ -567,7 +567,151 @@ bool test_quick_restart() {
     return true;
 }
 
-// 12. 500-tick game simulation
+// 12. Skeleton Archer Ranged AI behavior
+bool test_skeleton_archer_ranged_ai() {
+    Map map(80, 25);
+    map.generate(1234);
+
+    const auto& rooms = map.getRooms();
+    TEST_ASSERT(!rooms.empty(), "Rooms must not be empty");
+    Point center = rooms[0].center();
+
+    // Verify center and offset tiles are walkable
+    Point playerPos = center;
+    Point archerPos{center.x + 3, center.y}; // distance 3: between min 2 and max 5
+
+    // Ensure floor tiles between player and archer
+    for (int x = center.x; x <= archerPos.x; ++x) {
+        map.setTile(x, center.y, TileType::Floor);
+    }
+
+    // At distance 3 with clear LOS, Archer should choose RangedAttack
+    auto actionRanged = MonsterAI::decideAction(
+        map, archerPos, playerPos, {}, 8,
+        MonsterArchetype::Ranged, 12, 12, 2, 5
+    );
+    TEST_ASSERT(actionRanged.type == AIActionType::RangedAttack, "Archer at distance 3 with clear LOS should choose RangedAttack");
+    TEST_ASSERT(actionRanged.targetPos == playerPos, "Archer ranged attack target must be playerPos");
+
+    // At distance 1 (adjacent <= minRangedDist = 2), Archer should retreat / kite
+    Point closeArcherPos{center.x + 1, center.y};
+    auto actionClose = MonsterAI::decideAction(
+        map, closeArcherPos, playerPos, {}, 8,
+        MonsterArchetype::Ranged, 12, 12, 2, 5
+    );
+    TEST_ASSERT(actionClose.type == AIActionType::Move, "Archer within minRangedDist must attempt to retreat");
+    int initialDist = std::abs(closeArcherPos.x - playerPos.x) + std::abs(closeArcherPos.y - playerPos.y);
+    int newDist = std::abs(actionClose.targetPos.x - playerPos.x) + std::abs(actionClose.targetPos.y - playerPos.y);
+    TEST_ASSERT(newDist >= initialDist, "Archer retreat step must not move closer to player");
+
+    return true;
+}
+
+// 13. Goblin Rogue Skirmisher retreat
+bool test_goblin_rogue_skirmisher_retreat() {
+    Map map(80, 25);
+    map.generate(5678);
+
+    Point playerPos = map.getPlayerSpawn();
+    Point roguePos{playerPos.x + 2, playerPos.y};
+    for (int x = playerPos.x; x <= roguePos.x + 2; ++x) {
+        map.setTile(x, playerPos.y, TileType::Floor);
+    }
+
+    // Full HP (10/10 > 50%): Skirmisher pursues / attacks
+    auto actionHealthy = MonsterAI::decideAction(
+        map, roguePos, playerPos, {}, 8,
+        MonsterArchetype::Skirmisher, 10, 10
+    );
+    TEST_ASSERT(actionHealthy.type == AIActionType::Move, "Healthy skirmisher should pursue target");
+    int healthyStepDist = std::abs(actionHealthy.targetPos.x - playerPos.x) + std::abs(actionHealthy.targetPos.y - playerPos.y);
+    int initialDist = std::abs(roguePos.x - playerPos.x) + std::abs(roguePos.y - playerPos.y);
+    TEST_ASSERT(healthyStepDist <= initialDist, "Healthy skirmisher should step closer towards target");
+
+    // Injured HP (4/10 <= 50%): Skirmisher retreats
+    auto actionInjured = MonsterAI::decideAction(
+        map, roguePos, playerPos, {}, 8,
+        MonsterArchetype::Skirmisher, 4, 10
+    );
+    TEST_ASSERT(actionInjured.type == AIActionType::Move, "Injured skirmisher should flee");
+    int fleeStepDist = std::abs(actionInjured.targetPos.x - playerPos.x) + std::abs(actionInjured.targetPos.y - playerPos.y);
+    TEST_ASSERT(fleeStepDist >= initialDist, "Injured skirmisher must step away from target");
+
+    return true;
+}
+
+// 14. Player Ranged Targeting & Shooting
+bool test_player_ranged_combat() {
+    Engine engine;
+    engine.init(9009);
+
+    const auto& rooms = engine.getMap().getRooms();
+    TEST_ASSERT(rooms.size() >= 2, "Need at least 2 rooms for test");
+
+    // Position player in the center of the first room
+    Point center = rooms[0].center();
+    engine.getPlayer().pos = center;
+    engine.getMonsters().clear();
+
+    // Spawn a target dummy 2 tiles to the right (inside the same room, guaranteed walkable with clear LOS)
+    Point mPos{center.x + 2, center.y};
+    if (!engine.getMap().isWalkable(mPos.x, mPos.y)) {
+        mPos = Point{center.x, center.y + 2};
+    }
+    TEST_ASSERT(engine.getMap().isWalkable(mPos.x, mPos.y), "Target dummy position must be walkable");
+
+    Entity testMonster;
+    testMonster.id = 777;
+    testMonster.name = "Target Dummy";
+    testMonster.pos = mPos;
+    testMonster.hp = 20;
+    testMonster.maxHp = 20;
+    testMonster.defense = 1;
+    engine.getMonsters().push_back(testMonster);
+
+    int playerAtk = engine.getTotalPlayerAttack();
+    int expectedDmg = std::max(1, playerAtk - testMonster.defense);
+
+    // Shoot at target dummy within range with clear LOS
+    bool shot = engine.shootAt(mPos);
+    TEST_ASSERT(shot, "Ranged shot at monster within range with clear LOS should succeed");
+
+    // Verify monster took damage
+    bool foundMonster = false;
+    for (const auto& m : engine.getMonsters()) {
+        if (m.id == 777) {
+            TEST_ASSERT(m.hp == 20 - expectedDmg, "Monster HP should decrease by damage amount");
+            foundMonster = true;
+            break;
+        }
+    }
+    TEST_ASSERT(foundMonster, "Target dummy must be in monster list");
+
+    // Test LOS blocked by wall (a target inside room 1 from room 0 is blocked)
+    Point room1Center = rooms[1].center();
+    Entity wallMonster;
+    wallMonster.id = 778;
+    wallMonster.name = "Hidden Monster";
+    wallMonster.pos = room1Center;
+    wallMonster.hp = 20;
+    wallMonster.maxHp = 20;
+    wallMonster.defense = 1;
+    engine.getMonsters().push_back(wallMonster);
+
+    if (!LineOfSight::hasLineOfSight(engine.getMap(), center, room1Center)) {
+        bool shotBlocked = engine.shootAt(room1Center);
+        TEST_ASSERT(!shotBlocked, "Shot should fail when line of sight is obstructed by walls");
+    }
+
+    // Test out of range (> 6 tiles)
+    Point farPos{center.x, center.y + 8};
+    bool shotFar = engine.shootAt(farPos);
+    TEST_ASSERT(!shotFar, "Shot beyond max range 6 must fail");
+
+    return true;
+}
+
+// 15. 500-tick game simulation
 bool test_headless_simulation() {
     std::cout << "    Instantiating Engine and running 500-tick headless simulation...\n";
     Engine engine;
@@ -597,6 +741,9 @@ int main() {
     RUN_TEST(test_safe_rest_healing);
     RUN_TEST(test_exp_and_level_up);
     RUN_TEST(test_quick_restart);
+    RUN_TEST(test_skeleton_archer_ranged_ai);
+    RUN_TEST(test_goblin_rogue_skirmisher_retreat);
+    RUN_TEST(test_player_ranged_combat);
     RUN_TEST(test_headless_simulation);
 
     std::cout << "========================================\n";

@@ -43,6 +43,8 @@ void Engine::init(unsigned int seed) {
     m_gameOver = false;
     m_victory = false;
     m_inventoryOpen = false;
+    m_targetingMode = false;
+    m_targetCursor = {0, 0};
     m_messageLog.clear();
     m_inventory.clear();
 
@@ -83,27 +85,30 @@ void Engine::spawnMonsters(int count) {
         monster.pos = pt;
 
         unsigned int roll = rng() % 100;
-        if (roll < 45) {
-            monster.name = "Goblin";
+        if (roll < 40) {
+            monster.name = "Goblin Rogue";
             monster.symbol = 'g';
             monster.colorCode = "\033[1;32m"; // Bright green
-            monster.hp = 8 + (m_floor - 1) * 2;
+            monster.archetype = MonsterArchetype::Skirmisher;
+            monster.hp = 10 + (m_floor - 1) * 2;
             monster.maxHp = monster.hp;
             monster.attack = 3 + (m_floor - 1);
             monster.defense = 1;
         } else if (roll < 75) {
-            monster.name = "Skeleton";
-            monster.symbol = 's';
+            monster.name = "Skeleton Archer";
+            monster.symbol = 'a';
             monster.colorCode = "\033[1;37m"; // Bright white
+            monster.archetype = MonsterArchetype::Ranged;
             monster.hp = 12 + (m_floor - 1) * 2;
             monster.maxHp = monster.hp;
             monster.attack = 4 + (m_floor - 1);
             monster.defense = 1;
         } else if (roll < 90) {
-            monster.name = "Orc";
+            monster.name = "Orc Warrior";
             monster.symbol = 'o';
             monster.colorCode = "\033[1;31m"; // Bright red
-            monster.hp = 16 + (m_floor - 1) * 3;
+            monster.archetype = MonsterArchetype::Melee;
+            monster.hp = 18 + (m_floor - 1) * 3;
             monster.maxHp = monster.hp;
             monster.attack = 5 + (m_floor - 1);
             monster.defense = 2;
@@ -111,10 +116,11 @@ void Engine::spawnMonsters(int count) {
             monster.name = "Dragon";
             monster.symbol = 'D';
             monster.colorCode = "\033[1;35m"; // Bright magenta
-            monster.hp = 25 + (m_floor - 1) * 4;
+            monster.archetype = MonsterArchetype::Melee;
+            monster.hp = 35 + (m_floor - 1) * 4;
             monster.maxHp = monster.hp;
-            monster.attack = 7 + (m_floor - 1);
-            monster.defense = 3;
+            monster.attack = 8 + (m_floor - 1);
+            monster.defense = 4;
         }
         m_monsters.push_back(monster);
     }
@@ -481,9 +487,9 @@ void Engine::attackEntity(Entity& attacker, Entity& defender) {
         } else if (attacker.id == m_player.id) {
             // Player defeated monster: grant exp
             int expVal = 10;
-            if (defender.name == "Goblin") expVal = 10;
-            else if (defender.name == "Skeleton") expVal = 15;
-            else if (defender.name == "Orc") expVal = 25;
+            if (defender.name == "Goblin Rogue" || defender.name == "Goblin") expVal = 10;
+            else if (defender.name == "Skeleton Archer" || defender.name == "Skeleton") expVal = 15;
+            else if (defender.name == "Orc Warrior" || defender.name == "Orc") expVal = 25;
             else if (defender.name == "Dragon") expVal = 50;
             addExp(expVal);
         }
@@ -620,13 +626,27 @@ void Engine::updateMonsters() {
             }
         }
 
-        AIAction action = MonsterAI::decideAction(m_map, monster.pos, m_player.pos, blockers, 8, false, false);
+        AIAction action = MonsterAI::decideAction(
+            m_map, monster.pos, m_player.pos, blockers, 8,
+            monster.archetype, monster.hp, monster.maxHp, 2, 5
+        );
 
         if (action.type == AIActionType::Attack) {
             attackEntity(monster, m_player);
             if (!m_player.isAlive()) {
                 m_gameOver = true;
                 m_running = false;
+                break;
+            }
+        } else if (action.type == AIActionType::RangedAttack) {
+            int damage = std::max(1, monster.attack - getTotalPlayerDefense());
+            m_player.hp -= damage;
+            addMessage(monster.name + " shoots an arrow at Player for " + std::to_string(damage) + " dmg!");
+            if (m_player.hp <= 0) {
+                m_player.hp = 0;
+                m_gameOver = true;
+                m_running = false;
+                addMessage("You were killed by ranged fire! GAME OVER.");
                 break;
             }
         } else if (action.type == AIActionType::Move) {
@@ -647,6 +667,106 @@ void Engine::updateMonsters() {
     }
 }
 
+void Engine::toggleTargetingMode() {
+    if (m_targetingMode) {
+        m_targetingMode = false;
+        addMessage("Targeting cancelled.");
+        return;
+    }
+    m_targetingMode = true;
+
+    // Auto-lock onto nearest visible alive monster within range 6
+    Point bestTarget{-1, -1};
+    int bestDist = 999;
+    for (const auto& m : m_monsters) {
+        if (m.isAlive() && m_fow.isVisible(m.pos.x, m.pos.y)) {
+            int d = std::max(std::abs(m.pos.x - m_player.pos.x), std::abs(m.pos.y - m_player.pos.y));
+            if (d <= 6 && d < bestDist && LineOfSight::hasLineOfSight(m_map, m_player.pos, m.pos)) {
+                bestDist = d;
+                bestTarget = m.pos;
+            }
+        }
+    }
+
+    if (bestTarget.x != -1) {
+        m_targetCursor = bestTarget;
+    } else {
+        // Fallback: 2 tiles in front or player pos
+        m_targetCursor = { m_player.pos.x + 2, m_player.pos.y };
+        if (!m_map.isInBounds(m_targetCursor.x, m_targetCursor.y)) {
+            m_targetCursor = m_player.pos;
+        }
+    }
+    addMessage("Targeting mode active. [WASD/Arrows] Aim | [Enter/Space/F] Shoot | [ESC] Cancel");
+}
+
+void Engine::moveTargetCursor(int dx, int dy) {
+    Point next{ m_targetCursor.x + dx, m_targetCursor.y + dy };
+    if (m_map.isInBounds(next.x, next.y)) {
+        m_targetCursor = next;
+    }
+}
+
+bool Engine::shootAtTarget() {
+    if (!m_map.isInBounds(m_targetCursor.x, m_targetCursor.y)) {
+        addMessage("Target out of bounds.");
+        return false;
+    }
+
+    int dist = std::max(std::abs(m_targetCursor.x - m_player.pos.x), std::abs(m_targetCursor.y - m_player.pos.y));
+    if (dist > 6) {
+        addMessage("Target is out of ranged weapon range (max 6 tiles).");
+        return false;
+    }
+
+    if (!LineOfSight::hasLineOfSight(m_map, m_player.pos, m_targetCursor)) {
+        addMessage("Line of sight to target is blocked.");
+        return false;
+    }
+
+    // Check if monster at target
+    Entity* targetMonster = nullptr;
+    for (auto& m : m_monsters) {
+        if (m.isAlive() && m.pos == m_targetCursor) {
+            targetMonster = &m;
+            break;
+        }
+    }
+
+    if (!targetMonster) {
+        addMessage("No monster at target position.");
+        return false;
+    }
+
+    // Inflict ranged attack damage
+    int dmg = std::max(1, getTotalPlayerAttack() - targetMonster->defense);
+    targetMonster->hp -= dmg;
+    if (targetMonster->hp <= 0) {
+        targetMonster->hp = 0;
+        addMessage("You shoot " + targetMonster->name + " with an arrow for " + std::to_string(dmg) + " dmg (KILLED)!");
+        int expVal = 10;
+        if (targetMonster->name == "Goblin Rogue" || targetMonster->name == "Goblin") expVal = 10;
+        else if (targetMonster->name == "Skeleton Archer" || targetMonster->name == "Skeleton") expVal = 15;
+        else if (targetMonster->name == "Orc Warrior" || targetMonster->name == "Orc") expVal = 25;
+        else if (targetMonster->name == "Dragon") expVal = 50;
+        addExp(expVal);
+    } else {
+        addMessage("You shoot " + targetMonster->name + " with an arrow for " + std::to_string(dmg) + " dmg (" +
+                   std::to_string(targetMonster->hp) + "/" + std::to_string(targetMonster->maxHp) + " HP).");
+    }
+
+    m_targetingMode = false;
+    m_turnCount++;
+    updateMonsters();
+    m_fow.computeFOV(m_map, m_player.pos, 8);
+    return true;
+}
+
+bool Engine::shootAt(Point target) {
+    m_targetCursor = target;
+    return shootAtTarget();
+}
+
 std::string Engine::renderToString() const {
     std::string out;
     out.reserve(80 * 25 * 4 + 2048);
@@ -661,6 +781,11 @@ std::string Engine::renderToString() const {
         for (int x = 0; x < width; ++x) {
             bool visible = m_fow.isVisible(x, y);
             bool explored = m_fow.isExplored(x, y);
+
+            if (m_targetingMode && m_targetCursor.x == x && m_targetCursor.y == y) {
+                out += "\033[1;36m*";
+                continue;
+            }
 
             if (visible) {
                 if (m_player.pos.x == x && m_player.pos.y == y) {
@@ -776,10 +901,12 @@ std::string Engine::renderToString() const {
         out += " \033[1;31m*** GAME OVER - Press [R] to Restart, [Q] to Quit ***\033[0m\033[K\n";
     } else if (m_victory) {
         out += " \033[1;32m*** VICTORY! Dungeon Cleared! Press [R] to Restart, [Q] to Quit ***\033[0m\033[K\n";
+    } else if (m_targetingMode) {
+        out += " \033[1;36m*** TARGETING MODE *** [WASD] Aim | [Enter/Space/F] Shoot | [ESC] Cancel\033[0m\033[K\n";
     } else if (m_inventoryOpen) {
         out += " \033[1;33m*** INVENTORY OPEN *** [W/S] Select | [Enter/Space] Use | [D] Drop | [I] Close\033[0m\033[K\n";
     } else {
-        out += " \033[90mControls: [WASD] Move | [I] Inventory | [.] Rest | [>] Stairs | [R] Restart | [Q] Quit\033[0m\033[K\n";
+        out += " \033[90mControls: [WASD] Move | [F] Shoot | [I] Inventory | [.] Rest | [>] Stairs | [R] Restart | [Q] Quit\033[0m\033[K\n";
     }
 
     // Modal or Combat Log
@@ -905,6 +1032,24 @@ void Engine::handleKey(int ch) {
         return;
     }
 
+    if (m_targetingMode) {
+        if (ch == 27 || ch == 'q' || ch == 'Q') {
+            m_targetingMode = false;
+            addMessage("Targeting cancelled.");
+        } else if (ch == 'f' || ch == 'F' || ch == 13 || ch == ' ') {
+            shootAtTarget();
+        } else if (ch == 'w' || ch == 'W' || ch == 'k' || ch == 'K') {
+            moveTargetCursor(0, -1);
+        } else if (ch == 's' || ch == 'S' || ch == 'j' || ch == 'J') {
+            moveTargetCursor(0, 1);
+        } else if (ch == 'a' || ch == 'A' || ch == 'h' || ch == 'H') {
+            moveTargetCursor(-1, 0);
+        } else if (ch == 'd' || ch == 'D' || ch == 'l' || ch == 'L') {
+            moveTargetCursor(1, 0);
+        }
+        return;
+    }
+
     switch (ch) {
         case 'q':
         case 'Q':
@@ -918,6 +1063,10 @@ void Engine::handleKey(int ch) {
         case 'i':
         case 'I':
             m_inventoryOpen = true;
+            break;
+        case 'f':
+        case 'F':
+            toggleTargetingMode();
             break;
         case 'w':
         case 'W':
@@ -962,6 +1111,13 @@ void Engine::handleSpecialKey(int code) {
         } else if (code == 80) { // Down
             selectNextInventoryItem();
         }
+        return;
+    }
+    if (m_targetingMode) {
+        if (code == 72) moveTargetCursor(0, -1);
+        else if (code == 80) moveTargetCursor(0, 1);
+        else if (code == 75) moveTargetCursor(-1, 0);
+        else if (code == 77) moveTargetCursor(1, 0);
         return;
     }
     switch (code) {
@@ -1095,6 +1251,19 @@ void Engine::runHeadless(int maxTicks, unsigned int seed) {
         }
         if (acted) continue;
 
+        // 2b. Check if any visible monster in range [2, 6] with clear LOS -> shoot it
+        for (const auto& m : m_monsters) {
+            if (m.isAlive() && m_fow.isVisible(m.pos.x, m.pos.y)) {
+                int d = std::max(std::abs(m.pos.x - m_player.pos.x), std::abs(m.pos.y - m_player.pos.y));
+                if (d >= 2 && d <= 6 && LineOfSight::hasLineOfSight(m_map, m_player.pos, m.pos)) {
+                    shootAt(m.pos);
+                    acted = true;
+                    break;
+                }
+            }
+        }
+        if (acted) continue;
+
         // 3. If there is an item nearby on the floor, step towards it to pick it up
         if (m_inventory.size() < MAX_INVENTORY_CAPACITY) {
             for (const auto& item : m_items) {
@@ -1188,6 +1357,18 @@ static LRESULT CALLBACK GuiWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             return 0;
         }
 
+        case WM_MOUSEMOVE: {
+            if (engine && engine->isTargetingMode()) {
+                int tx = LOWORD(lParam) / 14;
+                int ty = HIWORD(lParam) / 14;
+                if (engine->getMap().isInBounds(tx, ty)) {
+                    engine->setTargetCursor({tx, ty});
+                    InvalidateRect(hwnd, NULL, FALSE);
+                }
+            }
+            break;
+        }
+
         case WM_LBUTTONDOWN: {
             if (engine && engine->isInventoryOpen()) {
                 int mouseX = LOWORD(lParam);
@@ -1195,6 +1376,16 @@ static LRESULT CALLBACK GuiWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                 engine->handleInventoryClick(mouseX, mouseY, false);
                 InvalidateRect(hwnd, NULL, FALSE);
                 return 0;
+            }
+            if (engine && engine->isTargetingMode()) {
+                int tx = LOWORD(lParam) / 14;
+                int ty = HIWORD(lParam) / 14;
+                if (engine->getMap().isInBounds(tx, ty)) {
+                    engine->setTargetCursor({tx, ty});
+                    engine->shootAtTarget();
+                    InvalidateRect(hwnd, NULL, FALSE);
+                    return 0;
+                }
             }
             break;
         }
@@ -1204,6 +1395,11 @@ static LRESULT CALLBACK GuiWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                 int mouseX = LOWORD(lParam);
                 int mouseY = HIWORD(lParam);
                 engine->handleInventoryClick(mouseX, mouseY, true);
+                InvalidateRect(hwnd, NULL, FALSE);
+                return 0;
+            }
+            if (engine && engine->isTargetingMode()) {
+                engine->setTargetingMode(false);
                 InvalidateRect(hwnd, NULL, FALSE);
                 return 0;
             }
@@ -1281,6 +1477,26 @@ static LRESULT CALLBACK GuiWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                     }
                     handled = true;
                 }
+            } else if (engine->isTargetingMode()) {
+                if (wParam == VK_ESCAPE || wParam == 'Q') {
+                    engine->setTargetingMode(false);
+                    handled = true;
+                } else if (wParam == 'F' || wParam == VK_RETURN || wParam == VK_SPACE) {
+                    engine->shootAtTarget();
+                    handled = true;
+                } else if (wParam == 'W' || wParam == VK_UP) {
+                    engine->moveTargetCursor(0, -1);
+                    handled = true;
+                } else if (wParam == 'S' || wParam == VK_DOWN) {
+                    engine->moveTargetCursor(0, 1);
+                    handled = true;
+                } else if (wParam == 'A' || wParam == VK_LEFT) {
+                    engine->moveTargetCursor(-1, 0);
+                    handled = true;
+                } else if (wParam == 'D' || wParam == VK_RIGHT) {
+                    engine->moveTargetCursor(1, 0);
+                    handled = true;
+                }
             } else {
                 switch (wParam) {
                     case VK_ESCAPE:
@@ -1294,6 +1510,10 @@ static LRESULT CALLBACK GuiWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                         break;
                     case 'I':
                         engine->setInventoryOpen(true);
+                        handled = true;
+                        break;
+                    case 'F':
+                        engine->toggleTargetingMode();
                         handled = true;
                         break;
                     case 'W':
@@ -1400,6 +1620,26 @@ static LRESULT CALLBACK GuiWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                 } else if (wParam == ')') {
                     engine->dropItem(9); handled = true;
                 }
+            } else if (engine->isTargetingMode()) {
+                if (wParam == 27 || wParam == 'q' || wParam == 'Q') {
+                    engine->setTargetingMode(false);
+                    handled = true;
+                } else if (wParam == 'f' || wParam == 'F' || wParam == '\r' || wParam == ' ') {
+                    engine->shootAtTarget();
+                    handled = true;
+                } else if (wParam == 'w' || wParam == 'W') {
+                    engine->moveTargetCursor(0, -1);
+                    handled = true;
+                } else if (wParam == 's' || wParam == 'S') {
+                    engine->moveTargetCursor(0, 1);
+                    handled = true;
+                } else if (wParam == 'a' || wParam == 'A') {
+                    engine->moveTargetCursor(-1, 0);
+                    handled = true;
+                } else if (wParam == 'd' || wParam == 'D') {
+                    engine->moveTargetCursor(1, 0);
+                    handled = true;
+                }
             } else {
                 if (wParam == '>') {
                     engine->descendStairs();
@@ -1412,6 +1652,9 @@ static LRESULT CALLBACK GuiWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                     handled = true;
                 } else if (wParam == 'i' || wParam == 'I') {
                     engine->setInventoryOpen(true);
+                    handled = true;
+                } else if (wParam == 'f' || wParam == 'F') {
+                    engine->toggleTargetingMode();
                     handled = true;
                 } else if (wParam == 'q' || wParam == 'Q') {
                     DestroyWindow(hwnd);
@@ -1673,10 +1916,10 @@ void Engine::renderGui(void* hdcVoid, int width, int height) {
 
             HBRUSH hbrMonster = hbrGoblin;
             COLORREF txtColor = RGB(255, 255, 255);
-            if (m.name == "Skeleton") {
+            if (m.name == "Skeleton" || m.name == "Skeleton Archer") {
                 hbrMonster = hbrSkeleton;
                 txtColor = RGB(30, 30, 30);
-            } else if (m.name == "Orc") {
+            } else if (m.name == "Orc" || m.name == "Orc Warrior") {
                 hbrMonster = hbrOrc;
             } else if (m.name == "Dragon") {
                 hbrMonster = hbrDragon;
@@ -1738,6 +1981,62 @@ void Engine::renderGui(void* hdcVoid, int width, int height) {
         HBRUSH curHpBr = (m_player.hp > m_player.maxHp / 2) ? hbrGreen :
                          ((m_player.hp > m_player.maxHp / 4) ? hbrYellow : hbrRed);
         FillRect(memDC, &rFg, curHpBr);
+    }
+
+    // 4b. Render Targeting Cursor & Line of Sight
+    if (m_targetingMode) {
+        int tx = m_targetCursor.x * TILE_SIZE;
+        int ty = m_targetCursor.y * TILE_SIZE;
+
+        int dist = std::max(std::abs(m_targetCursor.x - m_player.pos.x), std::abs(m_targetCursor.y - m_player.pos.y));
+        bool hasLOS = LineOfSight::hasLineOfSight(m_map, m_player.pos, m_targetCursor);
+        bool isValid = (dist <= 6 && hasLOS);
+
+        COLORREF targetColor = isValid ? RGB(0, 240, 255) : RGB(255, 60, 60);
+
+        // Draw line from player center to cursor center
+        HPEN hpenLine = CreatePen(PS_DOT, 1, targetColor);
+        HPEN oldP = static_cast<HPEN>(SelectObject(memDC, hpenLine));
+        SetBkMode(memDC, TRANSPARENT);
+        MoveToEx(memDC, px + TILE_SIZE / 2, py + TILE_SIZE / 2, NULL);
+        LineTo(memDC, tx + TILE_SIZE / 2, ty + TILE_SIZE / 2);
+        SelectObject(memDC, oldP);
+        DeleteObject(hpenLine);
+
+        // Draw Crosshair / Reticle on target cursor
+        HPEN hpenReticle = CreatePen(PS_SOLID, 2, targetColor);
+        oldP = static_cast<HPEN>(SelectObject(memDC, hpenReticle));
+
+        // Corner brackets around the target tile
+        // Top-Left corner
+        MoveToEx(memDC, tx, ty, NULL);
+        LineTo(memDC, tx + 5, ty);
+        MoveToEx(memDC, tx, ty, NULL);
+        LineTo(memDC, tx, ty + 5);
+
+        // Top-Right corner
+        MoveToEx(memDC, tx + TILE_SIZE, ty, NULL);
+        LineTo(memDC, tx + TILE_SIZE - 5, ty);
+        MoveToEx(memDC, tx + TILE_SIZE, ty, NULL);
+        LineTo(memDC, tx + TILE_SIZE, ty + 5);
+
+        // Bottom-Left corner
+        MoveToEx(memDC, tx, ty + TILE_SIZE, NULL);
+        LineTo(memDC, tx + 5, ty + TILE_SIZE);
+        MoveToEx(memDC, tx, ty + TILE_SIZE, NULL);
+        LineTo(memDC, tx, ty + TILE_SIZE - 5);
+
+        // Bottom-Right corner
+        MoveToEx(memDC, tx + TILE_SIZE, ty + TILE_SIZE, NULL);
+        LineTo(memDC, tx + TILE_SIZE - 5, ty + TILE_SIZE);
+        MoveToEx(memDC, tx + TILE_SIZE, ty + TILE_SIZE, NULL);
+        LineTo(memDC, tx + TILE_SIZE, ty + TILE_SIZE - 5);
+
+        // Center dot
+        SetPixel(memDC, tx + TILE_SIZE / 2, ty + TILE_SIZE / 2, targetColor);
+
+        SelectObject(memDC, oldP);
+        DeleteObject(hpenReticle);
     }
 
     // 5. Sleek Bottom HUD
@@ -1812,11 +2111,18 @@ void Engine::renderGui(void* hdcVoid, int width, int height) {
 
     // Controls Hints
     SetTextColor(memDC, RGB(140, 150, 165));
-    std::string c1 = "[WASD / Arrows] Move & Attack   |   [I] Inventory (" +
+    std::string c1 = "[WASD / Arrows] Move & Attack   |   [F] Shoot   |   [I] Inventory (" +
                      std::to_string(m_inventory.size()) + "/10)   |   [Space / .] Rest";
     TextOutA(memDC, 20, hudY + 112, c1.c_str(), static_cast<int>(c1.size()));
-    std::string c2 = "[>] Descend Stairs   |   [R] Quick Restart   |   [Q / ESC] Quit";
-    TextOutA(memDC, 20, hudY + 134, c2.c_str(), static_cast<int>(c2.size()));
+
+    if (m_targetingMode) {
+        SetTextColor(memDC, RGB(0, 240, 255));
+        std::string tModeStr = "*** TARGETING MODE *** [WASD/Click] Aim | [Enter/Space/F/L-Click] Fire | [ESC/R-Click] Cancel";
+        TextOutA(memDC, 20, hudY + 134, tModeStr.c_str(), static_cast<int>(tModeStr.size()));
+    } else {
+        std::string c2 = "[>] Descend Stairs   |   [R] Quick Restart   |   [Q / ESC] Quit";
+        TextOutA(memDC, 20, hudY + 134, c2.c_str(), static_cast<int>(c2.size()));
+    }
 
     // Right Column: Combat Log
     SetTextColor(memDC, RGB(240, 200, 60));
