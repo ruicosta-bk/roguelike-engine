@@ -35,6 +35,10 @@ void Engine::init(unsigned int seed) {
     m_seed = seed;
     m_floor = 1;
     m_turnCount = 0;
+    m_safeRestCount = 0;
+    m_playerLevel = 1;
+    m_playerExp = 0;
+    m_playerExpToNext = 20;
     m_running = true;
     m_gameOver = false;
     m_victory = false;
@@ -53,9 +57,16 @@ void Engine::init(unsigned int seed) {
     m_player.attack = 5;
     m_player.defense = 2;
 
-    addMessage("Welcome to the Dungeons of Doom! [WASD/Arrows to move, Q to quit]");
+    addMessage("Welcome to the Dungeons of Doom! [WASD/Arrows: Move, R: Restart, Q: Quit]");
     spawnMonsters(6);
+    spawnItems(4);
     m_fow.computeFOV(m_map, m_player.pos, 8);
+    checkItemPickup();
+}
+
+void Engine::restart() {
+    init(m_seed + 1);
+    addMessage("Game restarted!");
 }
 
 void Engine::spawnMonsters(int count) {
@@ -70,7 +81,7 @@ void Engine::spawnMonsters(int count) {
         monster.pos = pt;
 
         unsigned int roll = rng() % 100;
-        if (roll < 50) {
+        if (roll < 45) {
             monster.name = "Goblin";
             monster.symbol = 'g';
             monster.colorCode = "\033[1;32m"; // Bright green
@@ -78,7 +89,7 @@ void Engine::spawnMonsters(int count) {
             monster.maxHp = monster.hp;
             monster.attack = 3 + (m_floor - 1);
             monster.defense = 1;
-        } else if (roll < 80) {
+        } else if (roll < 75) {
             monster.name = "Skeleton";
             monster.symbol = 's';
             monster.colorCode = "\033[1;37m"; // Bright white
@@ -86,7 +97,7 @@ void Engine::spawnMonsters(int count) {
             monster.maxHp = monster.hp;
             monster.attack = 4 + (m_floor - 1);
             monster.defense = 1;
-        } else {
+        } else if (roll < 90) {
             monster.name = "Orc";
             monster.symbol = 'o';
             monster.colorCode = "\033[1;31m"; // Bright red
@@ -94,8 +105,34 @@ void Engine::spawnMonsters(int count) {
             monster.maxHp = monster.hp;
             monster.attack = 5 + (m_floor - 1);
             monster.defense = 2;
+        } else {
+            monster.name = "Dragon";
+            monster.symbol = 'D';
+            monster.colorCode = "\033[1;35m"; // Bright magenta
+            monster.hp = 25 + (m_floor - 1) * 4;
+            monster.maxHp = monster.hp;
+            monster.attack = 7 + (m_floor - 1);
+            monster.defense = 3;
         }
         m_monsters.push_back(monster);
+    }
+}
+
+void Engine::spawnItems(int count) {
+    m_items.clear();
+    auto spawnPoints = m_map.getItemSpawns(count);
+    int idCounter = 1;
+
+    for (const auto& pt : spawnPoints) {
+        Item item;
+        item.id = idCounter++;
+        item.name = "Health Potion";
+        item.symbol = '!';
+        item.colorCode = "\033[1;35m"; // Bright magenta
+        item.pos = pt;
+        item.healAmount = 12;
+        item.pickedUp = false;
+        m_items.push_back(item);
     }
 }
 
@@ -106,16 +143,50 @@ void Engine::addMessage(const std::string& msg) {
     }
 }
 
+void Engine::addExp(int amount) {
+    m_playerExp += amount;
+    addMessage("You gained " + std::to_string(amount) + " EXP!");
+    while (m_playerExp >= m_playerExpToNext) {
+        m_playerExp -= m_playerExpToNext;
+        m_playerLevel++;
+        m_playerExpToNext *= 2;
+        m_player.maxHp += 5;
+        m_player.hp = m_player.maxHp;
+        m_player.attack += 1;
+        m_player.defense += 1;
+        addMessage("LEVEL UP! You reached Level " + std::to_string(m_playerLevel) + "! (HP restored, Stats +1)");
+    }
+}
+
+void Engine::checkItemPickup() {
+    for (auto& item : m_items) {
+        if (!item.pickedUp && item.pos == m_player.pos) {
+            item.pickedUp = true;
+            m_player.hp = std::min(m_player.maxHp, m_player.hp + item.healAmount);
+            addMessage("You drank a Health Potion (+" + std::to_string(item.healAmount) + " HP)!");
+        }
+    }
+}
+
 void Engine::attackEntity(Entity& attacker, Entity& defender) {
     int damage = std::max(1, attacker.attack - defender.defense);
     defender.hp -= damage;
     if (defender.hp <= 0) {
         defender.hp = 0;
         addMessage(attacker.name + " hits " + defender.name + " for " + std::to_string(damage) + " dmg (KILLED)!");
+
         if (defender.id == m_player.id) {
             m_gameOver = true;
             m_running = false;
             addMessage("You have died! GAME OVER.");
+        } else if (attacker.id == m_player.id) {
+            // Player defeated monster: grant exp
+            int expVal = 10;
+            if (defender.name == "Goblin") expVal = 10;
+            else if (defender.name == "Skeleton") expVal = 15;
+            else if (defender.name == "Orc") expVal = 25;
+            else if (defender.name == "Dragon") expVal = 50;
+            addExp(expVal);
         }
     } else {
         addMessage(attacker.name + " hits " + defender.name + " for " + std::to_string(damage) + " dmg (" +
@@ -130,6 +201,9 @@ bool Engine::stepPlayer(int dx, int dy) {
     if (!m_map.isInBounds(target.x, target.y)) {
         return false;
     }
+
+    // Moving resets safe rest count
+    m_safeRestCount = 0;
 
     // Bump combat: check if an alive monster is at target tile
     for (auto& monster : m_monsters) {
@@ -155,6 +229,8 @@ bool Engine::stepPlayer(int dx, int dy) {
     // Walkable floor or open door or stairs
     if (m_map.isWalkable(target.x, target.y)) {
         m_player.pos = target;
+        checkItemPickup();
+
         if (m_map.getTile(target.x, target.y) == TileType::StairsDown) {
             addMessage("You see stairs leading down here. Press '>' to descend.");
         }
@@ -177,12 +253,15 @@ bool Engine::descendStairs() {
             return true;
         }
         m_floor++;
+        m_safeRestCount = 0;
         m_map.generate(m_seed + static_cast<unsigned int>(m_floor) * 100);
         m_fow.init(m_map.getWidth(), m_map.getHeight());
         m_player.pos = m_map.getPlayerSpawn();
         m_player.hp = std::min(m_player.maxHp, m_player.hp + 8); // Descending heals some HP
         spawnMonsters(6 + m_floor);
+        spawnItems(4);
         m_fow.computeFOV(m_map, m_player.pos, 8);
+        checkItemPickup();
         addMessage("You descended to Dungeon Floor " + std::to_string(m_floor) + "!");
         m_turnCount++;
         return true;
@@ -194,7 +273,35 @@ bool Engine::descendStairs() {
 
 void Engine::waitTurn() {
     if (m_gameOver || m_victory) return;
-    addMessage("You wait a turn.");
+
+    // Natural Healing (Safe Rest):
+    // Check if any alive monster is currently visible in FOV
+    bool monsterVisible = false;
+    for (const auto& m : m_monsters) {
+        if (m.isAlive() && m_fow.isVisible(m.pos.x, m.pos.y)) {
+            monsterVisible = true;
+            break;
+        }
+    }
+
+    if (!monsterVisible) {
+        m_safeRestCount++;
+        if (m_safeRestCount >= 5) {
+            m_safeRestCount = 0;
+            if (m_player.hp < m_player.maxHp) {
+                m_player.hp = std::min(m_player.maxHp, m_player.hp + 1);
+                addMessage("You rest safely and recover 1 HP.");
+            } else {
+                addMessage("You rest safely (HP full).");
+            }
+        } else {
+            addMessage("You wait a turn.");
+        }
+    } else {
+        m_safeRestCount = 0;
+        addMessage("You wait a turn (Enemies near!).");
+    }
+
     updateMonsters();
     m_turnCount++;
     m_fow.computeFOV(m_map, m_player.pos, 8);
@@ -274,6 +381,18 @@ std::string Engine::renderToString() const {
                 }
                 if (monsterDrawn) continue;
 
+                // Check consumable item on visible tile
+                bool itemDrawn = false;
+                for (const auto& item : m_items) {
+                    if (!item.pickedUp && item.pos.x == x && item.pos.y == y) {
+                        out += item.colorCode;
+                        out += item.symbol;
+                        itemDrawn = true;
+                        break;
+                    }
+                }
+                if (itemDrawn) continue;
+
                 TileType t = m_map.getTile(x, y);
                 switch (t) {
                     case TileType::Wall:
@@ -322,7 +441,13 @@ std::string Engine::renderToString() const {
     // HUD Divider
     out += "\033[1;34m" + std::string(static_cast<size_t>(width), '=') + "\033[0m\n";
 
-    // HUD: HP Bar, Floor, Turn, Stats
+    // HUD Line 1: Floor, Turn, Level, EXP
+    out += " Floor: \033[1;36m" + std::to_string(m_floor) + "\033[0m | ";
+    out += "Turn: \033[1;36m" + std::to_string(m_turnCount) + "\033[0m | ";
+    out += "Level: \033[1;32m" + std::to_string(m_playerLevel) + "\033[0m | ";
+    out += "EXP: \033[1;33m" + std::to_string(m_playerExp) + "/" + std::to_string(m_playerExpToNext) + "\033[0m\033[K\n";
+
+    // HUD Line 2: HP Bar, Atk, Def
     int barWidth = 16;
     int curHp = std::max(0, m_player.hp);
     int maxHp = std::max(1, m_player.maxHp);
@@ -336,9 +461,7 @@ std::string Engine::renderToString() const {
         hpColor = "\033[1;33m"; // Yellow
     }
 
-    out += " Floor: \033[1;36m" + std::to_string(m_floor) + "\033[0m | ";
-    out += "Turn: \033[1;36m" + std::to_string(m_turnCount) + "\033[0m | ";
-    out += "HP: " + hpColor + "[" + std::string(static_cast<size_t>(filled), '=') +
+    out += " HP: " + hpColor + "[" + std::string(static_cast<size_t>(filled), '=') +
            std::string(static_cast<size_t>(barWidth - filled), ' ') + "] ";
     out += std::to_string(curHp) + "/" + std::to_string(maxHp) + "\033[0m | ";
     out += "Atk: \033[1;35m" + std::to_string(m_player.attack) + "\033[0m | ";
@@ -346,11 +469,11 @@ std::string Engine::renderToString() const {
 
     // Status / Controls
     if (m_gameOver) {
-        out += " \033[1;31m*** GAME OVER - Press Q to Quit ***\033[0m\033[K\n";
+        out += " \033[1;31m*** GAME OVER - Press [R] to Restart, [Q] to Quit ***\033[0m\033[K\n";
     } else if (m_victory) {
-        out += " \033[1;32m*** VICTORY! You conquered the dungeon! Press Q to Quit ***\033[0m\033[K\n";
+        out += " \033[1;32m*** VICTORY! Dungeon Cleared! Press [R] to Restart, [Q] to Quit ***\033[0m\033[K\n";
     } else {
-        out += " \033[90mControls: [WASD/Arrows] Move/Attack | [.] Wait | [>] Stairs | [Q] Quit\033[0m\033[K\n";
+        out += " \033[90mControls: [WASD/Arrows] Move | [.] Rest | [>] Stairs | [R] Restart | [Q] Quit\033[0m\033[K\n";
     }
 
     // Message Log (last 5 messages)
@@ -409,6 +532,10 @@ void Engine::handleKey(int ch) {
         case 'Q':
         case 27: // ESC
             m_running = false;
+            break;
+        case 'r':
+        case 'R':
+            restart();
             break;
         case 'w':
         case 'W':
@@ -469,7 +596,30 @@ void Engine::runInteractive() {
     initConsole();
     render();
 
-    while (m_running && !m_gameOver && !m_victory) {
+    while (m_running) {
+        if (m_gameOver || m_victory) {
+            render();
+            while (m_gameOver || m_victory) {
+#ifdef _WIN32
+                if (_kbhit()) {
+                    int ch = _getch();
+                    if (ch == 'q' || ch == 'Q' || ch == 27) {
+                        m_running = false;
+                        break;
+                    } else if (ch == 'r' || ch == 'R') {
+                        restart();
+                        render();
+                        break;
+                    }
+                }
+#else
+                break;
+#endif
+                sleepMs(50);
+            }
+            if (!m_running) break;
+        }
+
 #ifdef _WIN32
         if (_kbhit()) {
             int ch = _getch();
@@ -483,22 +633,6 @@ void Engine::runInteractive() {
         }
 #endif
         sleepMs(16);
-    }
-
-    // Keep final screen visible if game over or victory
-    if (m_gameOver || m_victory) {
-        render();
-        while (true) {
-#ifdef _WIN32
-            if (_kbhit()) {
-                int ch = _getch();
-                if (ch == 'q' || ch == 'Q' || ch == 27) break;
-            }
-#else
-            break;
-#endif
-            sleepMs(50);
-        }
     }
 
     restoreConsole();
@@ -524,7 +658,7 @@ void Engine::runHeadless(int maxTicks, unsigned int seed) {
             if (stairs.x != -1) break;
         }
 
-        // 1. If already standing on stairs, descend!
+        // 1. If standing on stairs, descend!
         if (m_player.pos == stairs) {
             descendStairs();
             continue;
@@ -547,7 +681,24 @@ void Engine::runHeadless(int maxTicks, unsigned int seed) {
         }
         if (acted) continue;
 
-        // 3. Pathfind towards stairs
+        // 3. If low HP and a potion is visible/reachable, try pathfinding towards potion
+        if (m_player.hp < m_player.maxHp / 2) {
+            for (const auto& item : m_items) {
+                if (!item.pickedUp) {
+                    auto path = Pathfinding::findPath(m_map, m_player.pos, item.pos);
+                    if (!path.empty()) {
+                        Point step = path[0];
+                        if (stepPlayer(step.x - m_player.pos.x, step.y - m_player.pos.y)) {
+                            acted = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (acted) continue;
+        }
+
+        // 4. Pathfind towards stairs
         if (stairs.x != -1) {
             auto path = Pathfinding::findPath(m_map, m_player.pos, stairs);
             if (!path.empty()) {
@@ -558,7 +709,7 @@ void Engine::runHeadless(int maxTicks, unsigned int seed) {
             }
         }
 
-        // 4. If pathfinding to stairs failed, explore towards any walkable adjacent tile
+        // 5. If pathfinding to stairs failed, explore towards any walkable adjacent tile
         if (!acted) {
             for (int i = 0; i < 4; ++i) {
                 Point next{m_player.pos.x + dx[i], m_player.pos.y + dy[i]};
@@ -572,7 +723,7 @@ void Engine::runHeadless(int maxTicks, unsigned int seed) {
             }
         }
 
-        // 5. If completely blocked, wait turn
+        // 6. If completely blocked, wait turn (triggers safe rest if no enemies nearby)
         if (!acted) {
             waitTurn();
         }

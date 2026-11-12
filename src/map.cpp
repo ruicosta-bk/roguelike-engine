@@ -279,3 +279,41 @@ std::vector<Point> Map::getMonsterSpawns(int count) const {
     size_t resultCount = std::min(static_cast<size_t>(count), candidates.size());
     return std::vector<Point>(candidates.begin(), candidates.begin() + resultCount);
 }
+
+std::vector<Point> Map::getItemSpawns(int count) const {
+    if (count <= 0) {
+        return {};
+    }
+
+    std::vector<Point> candidates;
+
+    // Collect walkable floor tiles across all rooms, excluding player spawn and stairs down
+    for (const auto& room : m_rooms) {
+        for (int y = room.y; y < room.y + room.height; ++y) {
+            for (int x = room.x; x < room.x + room.width; ++x) {
+                Point p{x, y};
+                if (getTile(x, y) == TileType::Floor && p != m_playerSpawn && p != m_stairsDownPos) {
+                    candidates.push_back(p);
+                }
+            }
+        }
+    }
+
+    // Fallback if no room floor candidates
+    if (candidates.empty()) {
+        for (int y = 0; y < m_height; ++y) {
+            for (int x = 0; x < m_width; ++x) {
+                Point p{x, y};
+                if (getTile(x, y) == TileType::Floor && p != m_playerSpawn && p != m_stairsDownPos) {
+                    candidates.push_back(p);
+                }
+            }
+        }
+    }
+
+    std::mt19937 rng(m_seed + 20011);
+    std::shuffle(candidates.begin(), candidates.end(), rng);
+
+    size_t resultCount = std::min(static_cast<size_t>(count), candidates.size());
+    return std::vector<Point>(candidates.begin(), candidates.begin() + resultCount);
+}

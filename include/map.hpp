@@ -61,6 +61,7 @@ public:
 
     Point getPlayerSpawn() const;
     std::vector<Point> getMonsterSpawns(int count) const;
+    std::vector<Point> getItemSpawns(int count) const;
 
     int getWidth() const;
     int getHeight() const;
