@@ -1,4 +1,5 @@
 #include <iostream>
+#include <fstream>
 #include <vector>
 #include <queue>
 #include <set>
@@ -968,7 +969,193 @@ bool test_gold_collection_and_score() {
     return true;
 }
 
-// 19. 500-tick game simulation
+// 19. Save and Load fidelity
+bool test_save_and_load_fidelity() {
+    Engine engine;
+    engine.init(8888);
+
+    engine.addGold(125);
+    engine.addExp(35);
+
+    Item axe;
+    axe.id = 555;
+    axe.name = "Battle Axe";
+    axe.category = ItemCategory::Weapon;
+    axe.atkBonus = 7;
+    engine.getInventory().push_back(axe);
+    engine.useOrEquipItem(0);
+
+    engine.getPlayer().hp = 18;
+
+    int savedHp = engine.getPlayer().hp;
+    int savedGold = engine.getGold();
+    int savedLevel = engine.getPlayerLevel();
+    int savedExp = engine.getPlayerExp();
+    Point savedPos = engine.getPlayer().pos;
+    int savedFloor = engine.getFloor();
+    size_t savedInvSize = engine.getInventory().size();
+    bool savedAxeEquipped = engine.getInventory()[0].equipped;
+
+    const std::string testSavePath = "test_temp_save.dat";
+    bool saved = engine.saveGame(testSavePath);
+    TEST_ASSERT(saved, "saveGame should succeed");
+
+    // Alter in-memory state
+    engine.init(9999);
+    TEST_ASSERT(engine.getGold() != savedGold, "Memory state should be altered");
+
+    // Load back
+    bool loaded = engine.loadGame(testSavePath);
+    TEST_ASSERT(loaded, "loadGame should succeed");
+
+    TEST_ASSERT(engine.getPlayer().hp == savedHp, "Loaded HP mismatch");
+    TEST_ASSERT(engine.getGold() == savedGold, "Loaded Gold mismatch");
+    TEST_ASSERT(engine.getPlayerLevel() == savedLevel, "Loaded Level mismatch");
+    TEST_ASSERT(engine.getPlayerExp() == savedExp, "Loaded EXP mismatch");
+    TEST_ASSERT(engine.getPlayer().pos == savedPos, "Loaded position mismatch");
+    TEST_ASSERT(engine.getFloor() == savedFloor, "Loaded floor mismatch");
+    TEST_ASSERT(engine.getInventory().size() == savedInvSize, "Loaded inventory size mismatch");
+    TEST_ASSERT(engine.getInventory()[0].equipped == savedAxeEquipped, "Loaded equipped state mismatch");
+    TEST_ASSERT(engine.getInventory()[0].name == "Battle Axe", "Loaded item name mismatch");
+
+    engine.deleteSave(testSavePath);
+    return true;
+}
+
+// 20. Permadeath: deleteSave removes save file upon game over
+bool test_permadeath_delete_save() {
+    Engine engine;
+    engine.init(1234);
+
+    const std::string savePath = "savegame.dat";
+    bool saved = engine.saveGame(savePath);
+    TEST_ASSERT(saved, "Initial saveGame should succeed");
+
+    {
+        std::ifstream checkFile(savePath);
+        TEST_ASSERT(checkFile.good(), "Save file should exist on disk");
+    }
+
+    // Deliver lethal attack to player
+    engine.getPlayer().hp = 2;
+    Entity monster;
+    monster.id = 999;
+    monster.name = "Orc";
+    monster.attack = 20;
+    monster.defense = 0;
+    monster.pos = engine.getPlayer().pos;
+
+    engine.attackEntity(monster, engine.getPlayer());
+    TEST_ASSERT(engine.isGameOver(), "Engine should be Game Over after lethal hit");
+    TEST_ASSERT(!engine.isRunning(), "Engine should no longer be running");
+
+    {
+        std::ifstream checkDeleted(savePath);
+        TEST_ASSERT(!checkDeleted.good(), "Save file must be deleted upon player death (permadeath)");
+    }
+
+    return true;
+}
+
+// 21. Floor 3 Boss spawn, Amulet of Yendor drop, and victory validation
+bool test_floor3_boss_and_victory() {
+    Engine engine;
+    engine.init(777);
+
+    auto moveToStairs = [&engine]() {
+        for (int y = 0; y < engine.getMap().getHeight(); ++y) {
+            for (int x = 0; x < engine.getMap().getWidth(); ++x) {
+                if (engine.getMap().getTile(x, y) == TileType::StairsDown) {
+                    engine.getPlayer().pos = Point{x, y};
+                    return;
+                }
+            }
+        }
+    };
+
+    // Descend to Floor 2, then Floor 3
+    moveToStairs();
+    bool descendedTo2 = engine.descendStairs();
+    TEST_ASSERT(descendedTo2, "Descending to Floor 2 should succeed");
+    TEST_ASSERT(engine.getFloor() == 2, "Engine should be on Floor 2");
+
+    moveToStairs();
+    bool descendedTo3 = engine.descendStairs();
+    TEST_ASSERT(descendedTo3, "Descending to Floor 3 should succeed");
+    TEST_ASSERT(engine.getFloor() == 3, "Engine should be on Floor 3");
+
+    // Locate Boss "Ancient Red Dragon"
+    Entity* boss = nullptr;
+    for (auto& m : engine.getMonsters()) {
+        if (m.name == "Ancient Red Dragon") {
+            boss = &m;
+            break;
+        }
+    }
+    TEST_ASSERT(boss != nullptr, "Ancient Red Dragon boss must spawn on Floor 3");
+    TEST_ASSERT(boss->hp == 60, "Boss HP should be 60");
+    TEST_ASSERT(boss->attack == 10, "Boss Attack should be 10");
+    TEST_ASSERT(boss->defense == 5, "Boss Defense should be 5");
+
+    // Locate stairs on Floor 3
+    Point stairsPos{-1, -1};
+    for (int y = 0; y < engine.getMap().getHeight(); ++y) {
+        for (int x = 0; x < engine.getMap().getWidth(); ++x) {
+            if (engine.getMap().getTile(x, y) == TileType::StairsDown) {
+                stairsPos = {x, y};
+                break;
+            }
+        }
+        if (stairsPos.x != -1) break;
+    }
+    TEST_ASSERT(stairsPos.x != -1, "Stairs down must exist on Floor 3");
+
+    // Attempt to descend stairs WITHOUT Amulet of Yendor
+    engine.getPlayer().pos = stairsPos;
+    bool winWithoutAmulet = engine.descendStairs();
+    TEST_ASSERT(!winWithoutAmulet, "Descending Floor 3 stairs without Amulet of Yendor must fail");
+    TEST_ASSERT(!engine.isVictory(), "Victory must NOT be achieved without Amulet of Yendor");
+
+    // Slay the boss
+    int goldBefore = engine.getGold();
+    Point bossPos = boss->pos;
+    engine.getPlayer().attack = 100; // Empower player to defeat boss
+    engine.attackEntity(engine.getPlayer(), *boss);
+    TEST_ASSERT(!boss->isAlive(), "Boss must be defeated");
+    TEST_ASSERT(engine.getGold() == goldBefore + 200, "Defeating boss must award 200 Gold");
+
+    // Verify Amulet of Yendor dropped at boss position
+    bool amuletDropped = false;
+    for (const auto& item : engine.getItems()) {
+        if (item.name == "Amulet of Yendor" && item.pos == bossPos) {
+            amuletDropped = true;
+            break;
+        }
+    }
+    TEST_ASSERT(amuletDropped, "Amulet of Yendor must drop at defeated boss position");
+
+    // Pick up Amulet of Yendor
+    engine.getPlayer().pos = bossPos;
+    engine.checkItemPickup();
+    bool hasAmuletInInv = false;
+    for (const auto& it : engine.getInventory()) {
+        if (it.name == "Amulet of Yendor") {
+            hasAmuletInInv = true;
+            break;
+        }
+    }
+    TEST_ASSERT(hasAmuletInInv, "Player should now carry Amulet of Yendor in inventory");
+
+    // Now descend stairs with Amulet of Yendor
+    engine.getPlayer().pos = stairsPos;
+    bool winWithAmulet = engine.descendStairs();
+    TEST_ASSERT(winWithAmulet, "Descending Floor 3 stairs with Amulet of Yendor should succeed");
+    TEST_ASSERT(engine.isVictory(), "True VICTORY must be achieved!");
+
+    return true;
+}
+
+// 22. 500-tick game simulation
 bool test_headless_simulation() {
     std::cout << "    Instantiating Engine and running 500-tick headless simulation...\n";
     Engine engine;
@@ -1005,6 +1192,9 @@ int main() {
     RUN_TEST(test_search_action_reveals_trap);
     RUN_TEST(test_chest_and_key_mechanics);
     RUN_TEST(test_gold_collection_and_score);
+    RUN_TEST(test_save_and_load_fidelity);
+    RUN_TEST(test_permadeath_delete_save);
+    RUN_TEST(test_floor3_boss_and_victory);
     RUN_TEST(test_headless_simulation);
 
     std::cout << "========================================\n";

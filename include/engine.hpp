@@ -52,6 +52,14 @@ struct Chest {
     int goldReward{30};
 };
 
+struct FloatingText {
+    int pixelX{0};
+    int pixelY{0};
+    std::string text;
+    uint32_t color{0};
+    int remainingTicks{30};
+};
+
 struct Entity {
     int id{0};
     std::string name;
@@ -99,6 +107,16 @@ public:
     std::vector<Trap>& getTraps() { return m_traps; }
     const std::vector<Chest>& getChests() const { return m_chests; }
     std::vector<Chest>& getChests() { return m_chests; }
+
+    // Visual polish & Floating text
+    void addFloatingText(int px, int py, const std::string& text, uint32_t color = 0);
+    const std::vector<FloatingText>& getFloatingTexts() const { return m_floatingTexts; }
+    std::vector<FloatingText>& getFloatingTexts() { return m_floatingTexts; }
+
+    // Save / Load & Permadeath
+    bool saveGame(const std::string& path = "savegame.dat") const;
+    bool loadGame(const std::string& path = "savegame.dat");
+    void deleteSave(const std::string& path = "savegame.dat");
 
     // Inventory & Equipment
     bool useOrEquipItem(size_t index);
@@ -167,6 +185,7 @@ private:
     std::vector<Item> m_inventory;
     std::vector<Trap> m_traps;
     std::vector<Chest> m_chests;
+    std::vector<FloatingText> m_floatingTexts;
     Map m_map;
     FogOfWar m_fow;
 

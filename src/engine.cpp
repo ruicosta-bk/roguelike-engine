@@ -3,6 +3,9 @@
 #include <iostream>
 #include <algorithm>
 #include <random>
+#include <fstream>
+#include <cstdio>
+#include <cmath>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -128,6 +131,46 @@ void Engine::spawnMonsters(int count) {
             monster.defense = 4;
         }
         m_monsters.push_back(monster);
+    }
+
+    // On Floor 3, spawn the Boss "Ancient Red Dragon" guarding the stairs room
+    if (m_floor == 3) {
+        Point stairsPos{-1, -1};
+        for (int y = 0; y < m_map.getHeight(); ++y) {
+            for (int x = 0; x < m_map.getWidth(); ++x) {
+                if (m_map.getTile(x, y) == TileType::StairsDown) {
+                    stairsPos = {x, y};
+                    break;
+                }
+            }
+            if (stairsPos.x != -1) break;
+        }
+
+        Point bossPos = spawnPoints.empty() ? Point{10, 10} : spawnPoints[0];
+        if (stairsPos.x != -1) {
+            const int dx[4] = {0, 0, 1, -1};
+            const int dy[4] = {1, -1, 0, 0};
+            for (int i = 0; i < 4; ++i) {
+                Point adj{stairsPos.x + dx[i], stairsPos.y + dy[i]};
+                if (m_map.isWalkable(adj.x, adj.y)) {
+                    bossPos = adj;
+                    break;
+                }
+            }
+        }
+
+        Entity boss;
+        boss.id = idCounter++;
+        boss.name = "Ancient Red Dragon";
+        boss.symbol = 'D';
+        boss.colorCode = "\033[1;31m"; // Bright Red
+        boss.archetype = MonsterArchetype::Melee;
+        boss.pos = bossPos;
+        boss.hp = 60;
+        boss.maxHp = 60;
+        boss.attack = 10;
+        boss.defense = 5;
+        m_monsters.push_back(boss);
     }
 }
 
@@ -345,6 +388,16 @@ void Engine::addMessage(const std::string& msg) {
     }
 }
 
+void Engine::addFloatingText(int px, int py, const std::string& text, uint32_t color) {
+    FloatingText ft;
+    ft.pixelX = px;
+    ft.pixelY = py;
+    ft.text = text;
+    ft.color = color;
+    ft.remainingTicks = 30;
+    m_floatingTexts.push_back(ft);
+}
+
 void Engine::addExp(int amount) {
     m_playerExp += amount;
     addMessage("You gained " + std::to_string(amount) + " EXP!");
@@ -367,6 +420,7 @@ void Engine::checkItemPickup() {
                 item.pickedUp = true;
                 int val = item.goldValue > 0 ? item.goldValue : 20;
                 m_gold += val;
+                addFloatingText(m_player.pos.x * 14 + 7, m_player.pos.y * 14, "+" + std::to_string(val) + " G", 0x00D7FF);
                 addMessage("You collected " + std::to_string(val) + " Gold coins!");
                 continue;
             }
@@ -424,6 +478,7 @@ bool Engine::useOrEquipItem(size_t index) {
 
     if (item.category == ItemCategory::Potion) {
         m_player.hp = std::min(m_player.maxHp, m_player.hp + item.healAmount);
+        addFloatingText(m_player.pos.x * 14 + 7, m_player.pos.y * 14, "+" + std::to_string(item.healAmount) + " HP", 0x50FF32);
         addMessage("You drank " + item.name + " (+" + std::to_string(item.healAmount) + " HP)!");
         m_inventory.erase(m_inventory.begin() + index);
         if (m_inventorySelectedIndex >= m_inventory.size() && !m_inventory.empty()) {
@@ -572,6 +627,13 @@ void Engine::attackEntity(Entity& attacker, Entity& defender) {
 
     int damage = std::max(1, atkVal - defVal);
     defender.hp -= damage;
+
+    if (attacker.id == m_player.id) {
+        addFloatingText(defender.pos.x * 14 + 7, defender.pos.y * 14, "-" + std::to_string(damage), 0x00E6FF);
+    } else if (defender.id == m_player.id) {
+        addFloatingText(m_player.pos.x * 14 + 7, m_player.pos.y * 14, "-" + std::to_string(damage), 0x3232FF);
+    }
+
     if (defender.hp <= 0) {
         defender.hp = 0;
         addMessage(attacker.name + " hits " + defender.name + " for " + std::to_string(damage) + " dmg (KILLED)!");
@@ -579,6 +641,7 @@ void Engine::attackEntity(Entity& attacker, Entity& defender) {
         if (defender.id == m_player.id) {
             m_gameOver = true;
             m_running = false;
+            deleteSave("savegame.dat");
             addMessage("You have died! GAME OVER.");
         } else if (attacker.id == m_player.id) {
             // Player defeated monster: grant exp
@@ -587,7 +650,23 @@ void Engine::attackEntity(Entity& attacker, Entity& defender) {
             else if (defender.name == "Skeleton Archer" || defender.name == "Skeleton") expVal = 15;
             else if (defender.name == "Orc Warrior" || defender.name == "Orc") expVal = 25;
             else if (defender.name == "Dragon") expVal = 50;
+            else if (defender.name == "Ancient Red Dragon") expVal = 100;
             addExp(expVal);
+
+            if (defender.name == "Ancient Red Dragon") {
+                Item amulet;
+                amulet.id = 9999;
+                amulet.name = "Amulet of Yendor";
+                amulet.symbol = '"';
+                amulet.category = ItemCategory::Scroll;
+                amulet.colorCode = "\033[1;33m";
+                amulet.pos = defender.pos;
+                amulet.pickedUp = false;
+                m_items.push_back(amulet);
+                m_gold += 200;
+                addFloatingText(m_player.pos.x * 14 + 7, m_player.pos.y * 14, "+200 G", 0x00D7FF);
+                addMessage("The Ancient Red Dragon collapses! It dropped the legendary Amulet of Yendor and 200 Gold!");
+            }
         }
     } else {
         addMessage(attacker.name + " hits " + defender.name + " for " + std::to_string(damage) + " dmg (" +
@@ -687,12 +766,14 @@ bool Engine::stepPlayer(int dx, int dy) {
             if (trap.pos == target) {
                 trap.revealed = true;
                 m_player.hp -= trap.damage;
+                addFloatingText(m_player.pos.x * 14 + 7, m_player.pos.y * 14, "-" + std::to_string(trap.damage), 0x3232FF);
                 std::string trapName = (trap.type == TrapType::Spike) ? "Spike Trap" : "Poison Trap";
                 addMessage("CLICK! You triggered a " + trapName + " (-" + std::to_string(trap.damage) + " HP)!");
                 if (m_player.hp <= 0) {
                     m_player.hp = 0;
                     m_gameOver = true;
                     m_running = false;
+                    deleteSave("savegame.dat");
                     addMessage("You were killed by a trap! GAME OVER.");
                     m_fow.computeFOV(m_map, m_player.pos, 8);
                     return true;
@@ -717,6 +798,26 @@ bool Engine::stepPlayer(int dx, int dy) {
 bool Engine::descendStairs() {
     if (m_map.getTile(m_player.pos.x, m_player.pos.y) == TileType::StairsDown) {
         if (m_floor >= 3) {
+            bool hasAmulet = false;
+            for (const auto& item : m_inventory) {
+                if (item.name == "Amulet of Yendor") {
+                    hasAmulet = true;
+                    break;
+                }
+            }
+            if (!hasAmulet) {
+                for (const auto& item : m_items) {
+                    if (!item.pickedUp && item.name == "Amulet of Yendor" && item.pos == m_player.pos) {
+                        hasAmulet = true;
+                        break;
+                    }
+                }
+            }
+            if (!hasAmulet) {
+                addMessage("The stairs are sealed by ancient magic! You must retrieve the Amulet of Yendor from the Boss.");
+                return false;
+            }
+
             m_victory = true;
             m_running = false;
             addMessage("You retrieved the Amulet of Yendor and escaped the dungeon! VICTORY!");
@@ -762,6 +863,7 @@ void Engine::waitTurn() {
             m_safeRestCount = 0;
             if (m_player.hp < m_player.maxHp) {
                 m_player.hp = std::min(m_player.maxHp, m_player.hp + 1);
+                addFloatingText(m_player.pos.x * 14 + 7, m_player.pos.y * 14, "+1 HP", 0x50FF32);
                 addMessage("You rest safely and recover 1 HP.");
             } else {
                 addMessage("You rest safely (HP full).");
@@ -808,11 +910,13 @@ void Engine::updateMonsters() {
         } else if (action.type == AIActionType::RangedAttack) {
             int damage = std::max(1, monster.attack - getTotalPlayerDefense());
             m_player.hp -= damage;
+            addFloatingText(m_player.pos.x * 14 + 7, m_player.pos.y * 14, "-" + std::to_string(damage), 0x3232FF);
             addMessage(monster.name + " shoots an arrow at Player for " + std::to_string(damage) + " dmg!");
             if (m_player.hp <= 0) {
                 m_player.hp = 0;
                 m_gameOver = true;
                 m_running = false;
+                deleteSave("savegame.dat");
                 addMessage("You were killed by ranged fire! GAME OVER.");
                 break;
             }
@@ -928,6 +1032,7 @@ bool Engine::shootAtTarget() {
     // Inflict ranged attack damage
     int dmg = std::max(1, getTotalPlayerAttack() - targetMonster->defense);
     targetMonster->hp -= dmg;
+    addFloatingText(targetMonster->pos.x * 14 + 7, targetMonster->pos.y * 14, "-" + std::to_string(dmg), 0x00E6FF);
     if (targetMonster->hp <= 0) {
         targetMonster->hp = 0;
         addMessage("You shoot " + targetMonster->name + " with an arrow for " + std::to_string(dmg) + " dmg (KILLED)!");
@@ -936,7 +1041,23 @@ bool Engine::shootAtTarget() {
         else if (targetMonster->name == "Skeleton Archer" || targetMonster->name == "Skeleton") expVal = 15;
         else if (targetMonster->name == "Orc Warrior" || targetMonster->name == "Orc") expVal = 25;
         else if (targetMonster->name == "Dragon") expVal = 50;
+        else if (targetMonster->name == "Ancient Red Dragon") expVal = 100;
         addExp(expVal);
+
+        if (targetMonster->name == "Ancient Red Dragon") {
+            Item amulet;
+            amulet.id = 9999;
+            amulet.name = "Amulet of Yendor";
+            amulet.symbol = '"';
+            amulet.category = ItemCategory::Scroll;
+            amulet.colorCode = "\033[1;33m";
+            amulet.pos = targetMonster->pos;
+            amulet.pickedUp = false;
+            m_items.push_back(amulet);
+            m_gold += 200;
+            addFloatingText(m_player.pos.x * 14 + 7, m_player.pos.y * 14, "+200 G", 0x00D7FF);
+            addMessage("The Ancient Red Dragon collapses! It dropped the legendary Amulet of Yendor and 200 Gold!");
+        }
     } else {
         addMessage("You shoot " + targetMonster->name + " with an arrow for " + std::to_string(dmg) + " dmg (" +
                    std::to_string(targetMonster->hp) + "/" + std::to_string(targetMonster->maxHp) + " HP).");
@@ -990,6 +1111,245 @@ bool Engine::searchSurroundings() {
 int Engine::calculateScore() const {
     int score = m_floor * 1000 + m_playerExp * 2 + m_gold * 5 + m_playerLevel * 200 - m_turnCount;
     return std::max(0, score);
+}
+
+bool Engine::saveGame(const std::string& path) const {
+    std::ofstream out(path);
+    if (!out.is_open()) return false;
+
+    out << "ROGUESAVE_V1\n";
+    out << m_seed << " " << m_floor << " " << m_turnCount << " " << m_gold << " "
+        << m_safeRestCount << " " << m_playerLevel << " " << m_playerExp << " "
+        << m_playerExpToNext << " " << m_running << " " << m_gameOver << " " << m_victory << "\n";
+
+    // Player
+    out << m_player.id << " " << m_player.hp << " " << m_player.maxHp << " "
+        << m_player.attack << " " << m_player.defense << " "
+        << m_player.pos.x << " " << m_player.pos.y << " "
+        << m_player.symbol << "\n";
+    out << m_player.name << "\n";
+
+    // Inventory
+    out << m_inventory.size() << "\n";
+    for (const auto& it : m_inventory) {
+        out << it.id << " " << static_cast<int>(it.category) << " "
+            << it.equipped << " " << it.pickedUp << " "
+            << it.healAmount << " " << it.atkBonus << " " << it.defBonus << " " << it.goldValue << " "
+            << it.pos.x << " " << it.pos.y << " " << it.symbol << "\n";
+        out << it.name << "\n";
+        out << it.colorCode << "\n";
+    }
+
+    // Ground items
+    out << m_items.size() << "\n";
+    for (const auto& it : m_items) {
+        out << it.id << " " << static_cast<int>(it.category) << " "
+            << it.equipped << " " << it.pickedUp << " "
+            << it.healAmount << " " << it.atkBonus << " " << it.defBonus << " " << it.goldValue << " "
+            << it.pos.x << " " << it.pos.y << " " << it.symbol << "\n";
+        out << it.name << "\n";
+        out << it.colorCode << "\n";
+    }
+
+    // Monsters
+    out << m_monsters.size() << "\n";
+    for (const auto& m : m_monsters) {
+        out << m.id << " " << m.hp << " " << m.maxHp << " "
+            << m.attack << " " << m.defense << " "
+            << static_cast<int>(m.archetype) << " "
+            << m.pos.x << " " << m.pos.y << " " << m.symbol << "\n";
+        out << m.name << "\n";
+        out << m.colorCode << "\n";
+    }
+
+    // Traps
+    out << m_traps.size() << "\n";
+    for (const auto& tr : m_traps) {
+        out << tr.id << " " << static_cast<int>(tr.type) << " "
+            << tr.revealed << " " << tr.damage << " "
+            << tr.pos.x << " " << tr.pos.y << "\n";
+    }
+
+    // Chests
+    out << m_chests.size() << "\n";
+    for (const auto& ch : m_chests) {
+        out << ch.id << " " << ch.locked << " " << ch.opened << " " << ch.goldReward << " "
+            << ch.pos.x << " " << ch.pos.y << " " << ch.contents.size() << "\n";
+        for (const auto& it : ch.contents) {
+            out << it.id << " " << static_cast<int>(it.category) << " "
+                << it.equipped << " " << it.pickedUp << " "
+                << it.healAmount << " " << it.atkBonus << " " << it.defBonus << " " << it.goldValue << " "
+                << it.pos.x << " " << it.pos.y << " " << it.symbol << "\n";
+            out << it.name << "\n";
+            out << it.colorCode << "\n";
+        }
+    }
+
+    // Map
+    out << m_map.getWidth() << " " << m_map.getHeight() << "\n";
+    for (int y = 0; y < m_map.getHeight(); ++y) {
+        for (int x = 0; x < m_map.getWidth(); ++x) {
+            out << static_cast<int>(m_map.getTile(x, y)) << " ";
+        }
+        out << "\n";
+    }
+
+    // Fog of War
+    out << m_fow.getWidth() << " " << m_fow.getHeight() << "\n";
+    for (int y = 0; y < m_fow.getHeight(); ++y) {
+        for (int x = 0; x < m_fow.getWidth(); ++x) {
+            out << (m_fow.isExplored(x, y) ? 1 : 0) << " " << (m_fow.isVisible(x, y) ? 1 : 0) << " ";
+        }
+        out << "\n";
+    }
+
+    return true;
+}
+
+bool Engine::loadGame(const std::string& path) {
+    std::ifstream in(path);
+    if (!in.is_open()) return false;
+
+    std::string header;
+    if (!(in >> header) || header != "ROGUESAVE_V1") {
+        return false;
+    }
+
+    in >> m_seed >> m_floor >> m_turnCount >> m_gold
+       >> m_safeRestCount >> m_playerLevel >> m_playerExp
+       >> m_playerExpToNext >> m_running >> m_gameOver >> m_victory;
+
+    // Player
+    int pId, pHp, pMaxHp, pAtk, pDef, pX, pY;
+    char pSym;
+    in >> pId >> pHp >> pMaxHp >> pAtk >> pDef >> pX >> pY >> pSym;
+    std::string pName;
+    std::getline(in >> std::ws, pName);
+    m_player.id = pId;
+    m_player.hp = pHp;
+    m_player.maxHp = pMaxHp;
+    m_player.attack = pAtk;
+    m_player.defense = pDef;
+    m_player.pos = {pX, pY};
+    m_player.symbol = pSym;
+    m_player.name = pName;
+    m_player.colorCode = "\033[1;33m";
+
+    // Inventory
+    size_t invCount = 0;
+    in >> invCount;
+    m_inventory.clear();
+    for (size_t i = 0; i < invCount; ++i) {
+        Item it;
+        int catInt;
+        in >> it.id >> catInt >> it.equipped >> it.pickedUp
+           >> it.healAmount >> it.atkBonus >> it.defBonus >> it.goldValue
+           >> it.pos.x >> it.pos.y >> it.symbol;
+        it.category = static_cast<ItemCategory>(catInt);
+        std::getline(in >> std::ws, it.name);
+        std::getline(in >> std::ws, it.colorCode);
+        m_inventory.push_back(it);
+    }
+
+    // Ground items
+    size_t itemsCount = 0;
+    in >> itemsCount;
+    m_items.clear();
+    for (size_t i = 0; i < itemsCount; ++i) {
+        Item it;
+        int catInt;
+        in >> it.id >> catInt >> it.equipped >> it.pickedUp
+           >> it.healAmount >> it.atkBonus >> it.defBonus >> it.goldValue
+           >> it.pos.x >> it.pos.y >> it.symbol;
+        it.category = static_cast<ItemCategory>(catInt);
+        std::getline(in >> std::ws, it.name);
+        std::getline(in >> std::ws, it.colorCode);
+        m_items.push_back(it);
+    }
+
+    // Monsters
+    size_t monCount = 0;
+    in >> monCount;
+    m_monsters.clear();
+    for (size_t i = 0; i < monCount; ++i) {
+        Entity m;
+        int archInt;
+        in >> m.id >> m.hp >> m.maxHp >> m.attack >> m.defense >> archInt
+           >> m.pos.x >> m.pos.y >> m.symbol;
+        m.archetype = static_cast<MonsterArchetype>(archInt);
+        std::getline(in >> std::ws, m.name);
+        std::getline(in >> std::ws, m.colorCode);
+        m_monsters.push_back(m);
+    }
+
+    // Traps
+    size_t trapCount = 0;
+    in >> trapCount;
+    m_traps.clear();
+    for (size_t i = 0; i < trapCount; ++i) {
+        Trap tr;
+        int typeInt;
+        in >> tr.id >> typeInt >> tr.revealed >> tr.damage >> tr.pos.x >> tr.pos.y;
+        tr.type = static_cast<TrapType>(typeInt);
+        m_traps.push_back(tr);
+    }
+
+    // Chests
+    size_t chestCount = 0;
+    in >> chestCount;
+    m_chests.clear();
+    for (size_t i = 0; i < chestCount; ++i) {
+        Chest ch;
+        size_t cLootCount = 0;
+        in >> ch.id >> ch.locked >> ch.opened >> ch.goldReward >> ch.pos.x >> ch.pos.y >> cLootCount;
+        for (size_t j = 0; j < cLootCount; ++j) {
+            Item it;
+            int catInt;
+            in >> it.id >> catInt >> it.equipped >> it.pickedUp
+               >> it.healAmount >> it.atkBonus >> it.defBonus >> it.goldValue
+               >> it.pos.x >> it.pos.y >> it.symbol;
+            it.category = static_cast<ItemCategory>(catInt);
+            std::getline(in >> std::ws, it.name);
+            std::getline(in >> std::ws, it.colorCode);
+            ch.contents.push_back(it);
+        }
+        m_chests.push_back(ch);
+    }
+
+    // Map
+    int mapW = 0, mapH = 0;
+    in >> mapW >> mapH;
+    for (int y = 0; y < mapH; ++y) {
+        for (int x = 0; x < mapW; ++x) {
+            int tileVal;
+            in >> tileVal;
+            m_map.setTile(x, y, static_cast<TileType>(tileVal));
+        }
+    }
+
+    // Fog of War
+    int fowW = 0, fowH = 0;
+    in >> fowW >> fowH;
+    m_fow.init(fowW, fowH);
+    for (int y = 0; y < fowH; ++y) {
+        for (int x = 0; x < fowW; ++x) {
+            int expVal, visVal;
+            in >> expVal >> visVal;
+            m_fow.setExplored(x, y, expVal != 0);
+            m_fow.setVisible(x, y, visVal != 0);
+        }
+    }
+
+    m_targetingMode = false;
+    m_inventoryOpen = false;
+    m_messageLog.clear();
+    addMessage("Game loaded successfully from " + path + "!");
+
+    return true;
+}
+
+void Engine::deleteSave(const std::string& path) {
+    std::remove(path.c_str());
 }
 
 std::string Engine::renderToString() const {
@@ -1174,7 +1534,7 @@ std::string Engine::renderToString() const {
     } else if (m_inventoryOpen) {
         out += " \033[1;33m*** INVENTORY OPEN *** [W/S] Select | [Enter/Space] Use | [D] Drop | [I] Close\033[0m\033[K\n";
     } else {
-        out += " \033[90mControls: [WASD] Move | [F] Shoot | [Z] Search | [I] Inventory | [.] Rest | [>] Stairs | [R] Restart | [Q] Quit\033[0m\033[K\n";
+        out += " \033[90mControls: [WASD] Move | [F] Shoot | [Z] Search | [I] Inventory | [.] Rest | [>] Stairs | [S] Save | [R] Restart | [Q] Quit\033[0m\033[K\n";
     }
 
     // Modal or Combat Log
@@ -1348,8 +1708,15 @@ void Engine::handleKey(int ch) {
         case 'K':
             stepPlayer(0, -1);
             break;
-        case 's':
+        case 19: // Ctrl+S
         case 'S':
+            if (saveGame("savegame.dat")) {
+                addMessage("Game saved successfully to savegame.dat!");
+            } else {
+                addMessage("Failed to save game!");
+            }
+            break;
+        case 's':
         case 'j':
         case 'J':
             stepPlayer(0, 1);
@@ -1502,10 +1869,28 @@ void Engine::runHeadless(int maxTicks, unsigned int seed) {
             if (stairs.x != -1) break;
         }
 
-        // 1. If standing on stairs, descend!
+        // 1. If standing on stairs, descend! (On Floor 3, require possessing Amulet of Yendor)
+        bool hasAmulet = false;
+        for (const auto& item : m_inventory) {
+            if (item.name == "Amulet of Yendor") {
+                hasAmulet = true;
+                break;
+            }
+        }
+        if (m_floor == 3 && !hasAmulet) {
+            for (const auto& item : m_items) {
+                if (!item.pickedUp && item.name == "Amulet of Yendor" && item.pos == m_player.pos) {
+                    hasAmulet = true;
+                    break;
+                }
+            }
+        }
+
         if (m_player.pos == stairs) {
-            descendStairs();
-            continue;
+            if (m_floor < 3 || hasAmulet) {
+                descendStairs();
+                continue;
+            }
         }
 
         // 2. Check if any monster is adjacent -> attack it
@@ -1583,6 +1968,35 @@ void Engine::runHeadless(int maxTicks, unsigned int seed) {
             }
         }
         if (acted) continue;
+
+        // 3b. On Floor 3 without Amulet, pathfind to Amulet on floor or Ancient Red Dragon
+        if (m_floor == 3 && !hasAmulet) {
+            Point targetGoal{-1, -1};
+            for (const auto& item : m_items) {
+                if (!item.pickedUp && item.name == "Amulet of Yendor") {
+                    targetGoal = item.pos;
+                    break;
+                }
+            }
+            if (targetGoal.x == -1) {
+                for (const auto& m : m_monsters) {
+                    if (m.isAlive() && m.name == "Ancient Red Dragon") {
+                        targetGoal = m.pos;
+                        break;
+                    }
+                }
+            }
+            if (targetGoal.x != -1) {
+                auto path = Pathfinding::findPath(m_map, m_player.pos, targetGoal);
+                if (!path.empty()) {
+                    Point step = path[0];
+                    if (stepPlayer(step.x - m_player.pos.x, step.y - m_player.pos.y)) {
+                        acted = true;
+                    }
+                }
+            }
+            if (acted) continue;
+        }
 
         // 4. Pathfind towards stairs
         if (stairs.x != -1) {
@@ -1829,6 +2243,17 @@ static LRESULT CALLBACK GuiWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                         handled = true;
                         break;
                     case 'S':
+                        if ((GetKeyState(VK_CONTROL) & 0x8000) || (GetKeyState(VK_SHIFT) & 0x8000)) {
+                            if (engine->saveGame("savegame.dat")) {
+                                engine->addMessage("Game saved successfully to savegame.dat!");
+                            } else {
+                                engine->addMessage("Failed to save game!");
+                            }
+                        } else {
+                            engine->stepPlayer(0, 1);
+                        }
+                        handled = true;
+                        break;
                     case VK_DOWN:
                         engine->stepPlayer(0, 1);
                         handled = true;
@@ -1968,6 +2393,13 @@ static LRESULT CALLBACK GuiWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                     handled = true;
                 } else if (wParam == 'q' || wParam == 'Q') {
                     DestroyWindow(hwnd);
+                    handled = true;
+                } else if (wParam == 'S' || wParam == 19) {
+                    if (engine->saveGame("savegame.dat")) {
+                        engine->addMessage("Game saved successfully to savegame.dat!");
+                    } else {
+                        engine->addMessage("Failed to save game!");
+                    }
                     handled = true;
                 }
             }
@@ -2302,7 +2734,7 @@ void Engine::renderGui(void* hdcVoid, int width, int height) {
                 txtColor = RGB(30, 30, 30);
             } else if (m.name == "Orc" || m.name == "Orc Warrior") {
                 hbrMonster = hbrOrc;
-            } else if (m.name == "Dragon") {
+            } else if (m.name == "Dragon" || m.name == "Ancient Red Dragon") {
                 hbrMonster = hbrDragon;
             }
 
@@ -2420,6 +2852,21 @@ void Engine::renderGui(void* hdcVoid, int width, int height) {
         DeleteObject(hpenReticle);
     }
 
+    // 4c. Render Floating Combat Text
+    SelectObject(memDC, hFontRegular);
+    SetBkMode(memDC, TRANSPARENT);
+    for (auto it = m_floatingTexts.begin(); it != m_floatingTexts.end(); ) {
+        int floatOffset = (30 - it->remainingTicks);
+        SetTextColor(memDC, static_cast<COLORREF>(it->color));
+        TextOutA(memDC, it->pixelX, it->pixelY - floatOffset, it->text.c_str(), static_cast<int>(it->text.size()));
+        it->remainingTicks--;
+        if (it->remainingTicks <= 0) {
+            it = m_floatingTexts.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
     // 5. Sleek Bottom HUD
     int hudY = mapH * TILE_SIZE;
     HBRUSH hbrHudBg = CreateSolidBrush(RGB(20, 22, 28));
@@ -2495,7 +2942,7 @@ void Engine::renderGui(void* hdcVoid, int width, int height) {
     // Controls Hints
     SetTextColor(memDC, RGB(140, 150, 165));
     std::string c1 = "[WASD / Arrows] Move & Attack   |   [F] Shoot   |   [Z] Search   |   [I] Inventory (" +
-                     std::to_string(m_inventory.size()) + "/10)   |   [Space / .] Rest";
+                     std::to_string(m_inventory.size()) + "/10)   |   [S] Quick Save   |   [Space / .] Rest";
     TextOutA(memDC, 20, hudY + 112, c1.c_str(), static_cast<int>(c1.size()));
 
     if (m_targetingMode) {
@@ -2648,6 +3095,19 @@ void Engine::renderGui(void* hdcVoid, int width, int height) {
 
         DeleteObject(hbrOverlayBg);
         DeleteObject(hpenOverlayBorder);
+    }
+
+    // 8. Low HP Danger Vignette (pulsing red border)
+    if (m_player.hp > 0 && m_player.hp <= m_player.maxHp / 4) {
+        int pulse = 160 + static_cast<int>(60.0 * std::sin(GetTickCount() * 0.008));
+        pulse = std::max(100, std::min(255, pulse));
+        HPEN hpenDanger = CreatePen(PS_SOLID, 4, RGB(pulse, 20, 20));
+        HPEN oldP = static_cast<HPEN>(SelectObject(memDC, hpenDanger));
+        HBRUSH oldB = static_cast<HBRUSH>(SelectObject(memDC, GetStockObject(NULL_BRUSH)));
+        Rectangle(memDC, 2, 2, width - 2, height - 2);
+        SelectObject(memDC, oldB);
+        SelectObject(memDC, oldP);
+        DeleteObject(hpenDanger);
     }
 
     // Cleanup GDI Objects

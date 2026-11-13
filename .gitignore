@@ -4,3 +4,6 @@ build/
 *.obj
 *.o
 
+scratch/
+savegame.dat
+

@@ -2,6 +2,7 @@
 
 #include <iostream>
 #include <string>
+#include <fstream>
 
 int main(int argc, char* argv[]) {
     bool headless = false;
@@ -24,12 +25,22 @@ int main(int argc, char* argv[]) {
 
     if (cli) {
         Engine engine;
+        std::ifstream f("savegame.dat");
+        if (f.good()) {
+            f.close();
+            engine.loadGame("savegame.dat");
+        }
         engine.runInteractive();
         return 0;
     }
 
     // Default: launch native 2D Win32 GUI window
     Engine engine;
+    std::ifstream f("savegame.dat");
+    if (f.good()) {
+        f.close();
+        engine.loadGame("savegame.dat");
+    }
     engine.runGui();
     return 0;
 }
