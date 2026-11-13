@@ -58,6 +58,7 @@ Sau khi build thành công, trong thư mục `build/` sẽ tạo ra 2 file thự
 | :--- | :--- | :--- |
 | **`W` / `A` / `S` / `D`** hoặc **Phím Mũi Tên** | **Di chuyển / Tấn công** | Đi theo 4 hướng. Đi đâm vào quái vật sẽ tự động ra đòn (*Bump Combat*). |
 | **`F`** | **Ngắm bắn tầm xa (Ranged Shoot)** | Bật chế độ ngắm bắn cung/phép. Tự động khóa quái vật gần nhất. Dùng `WASD`/Mũi tên/Chuột di tâm, nhấn `Enter`/`Space`/`F`/Click chuột trái để bắn! Nhấn `ESC` để hủy. |
+| **`Z`** | **Dò tìm cẩn thận (Search Traps)** | Quét 8 ô xung quanh để phát hiện các bẫy ngầm tàng hình mà không kích hoạt chúng. |
 | **`Space`** hoặc **`.`** | **Nghỉ / Chờ lượt (Rest)** | Bỏ qua lượt đi để nhử quái lại gần. Khi an toàn (không có quái trong tầm nhìn), cứ **5 lượt nghỉ** sẽ **hồi 1 HP**. |
 | **`I`** | **Mở / Đóng Túi đồ (Inventory)** | Bật popup quản lý túi đồ và trang bị vũ khí, áo giáp, bình máu, cuộn giấy. |
 | **`Shift + .`** (ký tự **`>`**) | **Xuống cầu thang (Descend)** | Khi đứng trên ô cầu thang `>` dẫn xuống tầng dưới, nhấn tổ hợp này để sang tầng tiếp theo. |
@@ -131,7 +132,21 @@ Quái vật không còn chỉ biết lao thẳng vào người chơi mà đượ
   - **Tăng vĩnh viễn**: +5 Max HP, +1 Sức tấn công (Atk), +1 Phòng thủ (Def).
   - Tăng mốc EXP yêu cầu cho cấp tiếp theo.
 
-### 6. Mục tiêu trò chơi (Victory Condition)
+### 6. Môi trường Tương tác: Bẫy ngầm, Rương báu & Tiền vàng (Track 3)
+- ⚠️ **Bẫy ngầm tàng hình (Hidden Traps - `^`)**:
+  - Đặt ngẫu nhiên trên sàn nhà. Ban đầu người chơi không thể nhìn thấy.
+  - Khi người chơi hoặc quái vật bước đè lên: Bẫy lộ diện vĩnh viễn và kích hoạt chông nhọn gây **6 sát thương**.
+  - **Phím `Z` (Dò tìm / Search)**: Đứng yên quét 8 ô xung quanh với tỷ lệ 80% phát hiện và vô hiệu hóa/lộ diện bẫy ngầm an toàn mà không bị dính sát thương!
+- 📦 **Rương báu bị khóa (Locked Chests - `C`) & Chìa khóa vàng (`Key` - `k`)**:
+  - Mỗi tầng xuất hiện rương kho báu gỗ bọc sắt có ổ khóa vàng.
+  - Bạn cần tìm và nhặt được **Chìa khóa vàng (Golden Key)** trên map hoặc đánh rơi từ quái.
+  - Đi đâm vào rương khi có chìa khóa trong túi đồ sẽ tự động mở khóa rương, nhận thưởng lượng lớn **Tiền vàng (+50 Gold)** và trang bị xịn!
+- 💰 **Tiền vàng (Gold - `$`) & Hệ thống Tính điểm (High Score)**:
+  - Các đồng tiền vàng rơi rải rác trên sàn hoặc nhặt từ rương báu sẽ được tự động gom vào kho tiền mà không tốn ô chứa trong túi đồ.
+  - Điểm số của bạn được cập nhật thời gian thực trên thanh HUD:
+    $$\text{Score} = \text{Floor} \times 1000 + \text{EXP} \times 2 + \text{Gold} \times 5 + \text{Level} \times 200 - \text{Turns}$$
+
+### 7. Mục tiêu trò chơi (Victory Condition)
 - Vượt qua **3 tầng hầm ngục nguy hiểm** (`Floor 1` $\rightarrow$ `Floor 2` $\rightarrow$ `Floor 3`).
 - Tìm thấy và bước xuống cầu thang ở tầng 3 để đoạt lấy bảo vật **Amulet of Yendor** và giành chiến thắng chung cuộc (**VICTORY**)!
 
