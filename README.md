@@ -59,6 +59,7 @@ Sau khi build thành công, trong thư mục `build/` sẽ tạo ra 2 file thự
 | **`W` / `A` / `S` / `D`** hoặc **Phím Mũi Tên** | **Di chuyển / Tấn công** | Đi theo 4 hướng. Đi đâm vào quái vật sẽ tự động ra đòn (*Bump Combat*). |
 | **`F`** | **Ngắm bắn tầm xa (Ranged Shoot)** | Bật chế độ ngắm bắn cung/phép. Tự động khóa quái vật gần nhất. Dùng `WASD`/Mũi tên/Chuột di tâm, nhấn `Enter`/`Space`/`F`/Click chuột trái để bắn! Nhấn `ESC` để hủy. |
 | **`Z`** | **Dò tìm cẩn thận (Search Traps)** | Quét 8 ô xung quanh để phát hiện các bẫy ngầm tàng hình mà không kích hoạt chúng. |
+| **`S`** | **Lưu game nhanh (Quick Save)** | Lưu toàn bộ trạng thái nhân vật, tầng, túi đồ vào `savegame.dat` để chơi tiếp bất cứ lúc nào. |
 | **`Space`** hoặc **`.`** | **Nghỉ / Chờ lượt (Rest)** | Bỏ qua lượt đi để nhử quái lại gần. Khi an toàn (không có quái trong tầm nhìn), cứ **5 lượt nghỉ** sẽ **hồi 1 HP**. |
 | **`I`** | **Mở / Đóng Túi đồ (Inventory)** | Bật popup quản lý túi đồ và trang bị vũ khí, áo giáp, bình máu, cuộn giấy. |
 | **`Shift + .`** (ký tự **`>`**) | **Xuống cầu thang (Descend)** | Khi đứng trên ô cầu thang `>` dẫn xuống tầng dưới, nhấn tổ hợp này để sang tầng tiếp theo. |
@@ -146,9 +147,25 @@ Quái vật không còn chỉ biết lao thẳng vào người chơi mà đượ
   - Điểm số của bạn được cập nhật thời gian thực trên thanh HUD:
     $$\text{Score} = \text{Floor} \times 1000 + \text{EXP} \times 2 + \text{Gold} \times 5 + \text{Level} \times 200 - \text{Turns}$$
 
-### 7. Mục tiêu trò chơi (Victory Condition)
+### 7. Hiệu ứng Đồ họa & Trận chiến Boss Đỉnh cao (Track 4)
+- 💥 **Chữ số bay chiến đấu (Floating Combat Text)**:
+  - Khi chém hoặc bắn tên trúng quái: Số sát thương màu vàng/trắng bay lên từ mục tiêu.
+  - Khi quái đánh trúng bạn: Số sát thương màu đỏ thẫm bay lên cảnh báo.
+  - Khi uống thuốc hồi máu hoặc nghỉ an toàn: Hiện `+X HP` màu xanh lá rực rỡ.
+  - Khi nhặt tiền vàng: Hiện `+X G` màu vàng kim lấp lánh.
+- 🩸 **Hiệu ứng Nguy hiểm (Low HP Danger Vignette)**:
+  - Khi lượng máu tụt xuống mức nguy cấp ($\le 25\%$ Max HP), viền màn hình sẽ chớp đỏ cảnh báo nguy hiểm nghẹt thở.
+- 🐉 **Trận chiến Trùm cuối Tầng 3 (Boss: Ancient Red Dragon)**:
+  - Xuất hiện tại căn phòng cuối cùng của Tầng 3 canh giữ lối thoát: **Ancient Red Dragon** (Máu 60, Tấn công 10, Phòng thủ 5).
+  - Tiêu diệt Trùm rồng cổ đại để đoạt lấy bảo vật huyền thoại **Amulet of Yendor**, nhận ngay **+200 Vàng** và **+100 EXP**.
+- 💾 **Hệ thống Lưu/Tải game & Permadeath**:
+  - Nhấn phím **`S`**: Lưu game tức thì vào file `savegame.dat`.
+  - Khởi động lại game: Tự động tiếp tục cuộc phiêu lưu từ vị trí và đồ đạc đã lưu.
+  - **Permadeath (Chết là hết)**: Khi nhân vật tử trận, file save sẽ tự động bị xóa sổ vĩnh viễn theo đúng tinh thần Roguelike truyền thống!
+
+### 8. Mục tiêu trò chơi (Victory Condition)
 - Vượt qua **3 tầng hầm ngục nguy hiểm** (`Floor 1` $\rightarrow$ `Floor 2` $\rightarrow$ `Floor 3`).
-- Tìm thấy và bước xuống cầu thang ở tầng 3 để đoạt lấy bảo vật **Amulet of Yendor** và giành chiến thắng chung cuộc (**VICTORY**)!
+- Tại Floor 3, bạn **bắt buộc phải đánh bại Boss Rồng Cổ Đại để giành lấy Amulet of Yendor** thì cầu thang thoát hiểm mới mở ra để mang về chiến thắng tối thượng (**VICTORY**)!
 
 ---
 
