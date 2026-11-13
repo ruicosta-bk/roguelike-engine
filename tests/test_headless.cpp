@@ -118,6 +118,26 @@ bool test_map_generation() {
         TEST_ASSERT(!(it == stairs), "Item spawn must not collide with stairs down");
     }
 
+    // Check trap spawns
+    auto trapSpawns = map.getTrapSpawns(3);
+    TEST_ASSERT(!trapSpawns.empty(), "Trap spawns should not be empty");
+    for (const auto& tr : trapSpawns) {
+        TEST_ASSERT(map.isInBounds(tr.x, tr.y), "Trap spawn out of bounds");
+        TEST_ASSERT(map.isWalkable(tr.x, tr.y), "Trap spawn must be walkable");
+        TEST_ASSERT(!(tr == spawn), "Trap spawn must not collide with player spawn");
+        TEST_ASSERT(!(tr == stairs), "Trap spawn must not collide with stairs down");
+    }
+
+    // Check chest spawns
+    auto chestSpawns = map.getChestSpawns(2);
+    TEST_ASSERT(!chestSpawns.empty(), "Chest spawns should not be empty");
+    for (const auto& ch : chestSpawns) {
+        TEST_ASSERT(map.isInBounds(ch.x, ch.y), "Chest spawn out of bounds");
+        TEST_ASSERT(map.isWalkable(ch.x, ch.y), "Chest spawn must be walkable");
+        TEST_ASSERT(!(ch == spawn), "Chest spawn must not collide with player spawn");
+        TEST_ASSERT(!(ch == stairs), "Chest spawn must not collide with stairs down");
+    }
+
     return true;
 }
 
@@ -711,7 +731,244 @@ bool test_player_ranged_combat() {
     return true;
 }
 
-// 15. 500-tick game simulation
+// 15. Trap mechanics: spawning, hidden state, revealing upon step, and inflicting damage
+bool test_trap_mechanics() {
+    Engine engine;
+    engine.init(1010);
+
+    const auto& traps = engine.getTraps();
+    TEST_ASSERT(!traps.empty(), "Floor should spawn traps");
+    for (const auto& tr : traps) {
+        TEST_ASSERT(!tr.revealed, "Traps must start hidden");
+    }
+
+    // Place a custom hidden spike trap at an open neighbor tile
+    Point pPos = engine.getPlayer().pos;
+    const int dx[4] = {1, -1, 0, 0};
+    const int dy[4] = {0, 0, 1, -1};
+    int walkDir = -1;
+    for (int i = 0; i < 4; ++i) {
+        Point neighbor{pPos.x + dx[i], pPos.y + dy[i]};
+        if (engine.getMap().isWalkable(neighbor.x, neighbor.y)) {
+            bool monsterThere = false;
+            for (const auto& m : engine.getMonsters()) {
+                if (m.isAlive() && m.pos == neighbor) {
+                    monsterThere = true;
+                    break;
+                }
+            }
+            if (!monsterThere) {
+                walkDir = i;
+                break;
+            }
+        }
+    }
+    TEST_ASSERT(walkDir != -1, "Player must have an open adjacent walkable tile");
+
+    Point targetPos{pPos.x + dx[walkDir], pPos.y + dy[walkDir]};
+    Trap testTrap;
+    testTrap.id = 9911;
+    testTrap.pos = targetPos;
+    testTrap.type = TrapType::Spike;
+    testTrap.revealed = false;
+    testTrap.damage = 6;
+    engine.getTraps().push_back(testTrap);
+
+    int initialHp = engine.getPlayer().hp;
+
+    // Step player onto trap tile
+    bool moved = engine.stepPlayer(dx[walkDir], dy[walkDir]);
+    TEST_ASSERT(moved, "Moving onto trap tile should succeed");
+    TEST_ASSERT(engine.getPlayer().pos == targetPos, "Player should be on target trap tile");
+
+    // Verify trap is revealed and damage inflicted
+    bool foundTrap = false;
+    for (const auto& tr : engine.getTraps()) {
+        if (tr.id == 9911) {
+            TEST_ASSERT(tr.revealed, "Trap must be revealed upon being triggered");
+            foundTrap = true;
+            break;
+        }
+    }
+    TEST_ASSERT(foundTrap, "Test trap must exist in traps list");
+    TEST_ASSERT(engine.getPlayer().hp == initialHp - 6, "Player HP must decrease by trap damage (6 HP)");
+
+    return true;
+}
+
+// 16. Search action safely revealing adjacent traps without triggering damage
+bool test_search_action_reveals_trap() {
+    Engine engine;
+    engine.init(2020);
+
+    Point pPos = engine.getPlayer().pos;
+    const int dx[4] = {1, -1, 0, 0};
+    const int dy[4] = {0, 0, 1, -1};
+    int walkDir = -1;
+    for (int i = 0; i < 4; ++i) {
+        Point neighbor{pPos.x + dx[i], pPos.y + dy[i]};
+        if (engine.getMap().isWalkable(neighbor.x, neighbor.y)) {
+            walkDir = i;
+            break;
+        }
+    }
+    TEST_ASSERT(walkDir != -1, "Player must have an open adjacent walkable tile");
+
+    Point trapPos{pPos.x + dx[walkDir], pPos.y + dy[walkDir]};
+    Trap testTrap;
+    testTrap.id = 9922;
+    testTrap.pos = trapPos;
+    testTrap.type = TrapType::Spike;
+    testTrap.revealed = false;
+    testTrap.damage = 6;
+    engine.getTraps().push_back(testTrap);
+
+    int initialHp = engine.getPlayer().hp;
+
+    // Call searchSurroundings until revealed (each call has 80% chance)
+    bool trapRevealed = false;
+    for (int attempt = 0; attempt < 15; ++attempt) {
+        engine.searchSurroundings();
+        for (const auto& tr : engine.getTraps()) {
+            if (tr.id == 9922 && tr.revealed) {
+                trapRevealed = true;
+                break;
+            }
+        }
+        if (trapRevealed) break;
+    }
+
+    TEST_ASSERT(trapRevealed, "Search action must successfully reveal adjacent hidden trap");
+    TEST_ASSERT(engine.getPlayer().hp == initialHp, "Search action must not trigger trap damage");
+    TEST_ASSERT(engine.getPlayer().pos == pPos, "Search action should not move player position");
+
+    return true;
+}
+
+// 17. Locked chest mechanics: blocked without key; unlocked and rewarded with key
+bool test_chest_and_key_mechanics() {
+    Engine engine;
+    engine.init(3030);
+
+    Point pPos = engine.getPlayer().pos;
+    const int dx[4] = {1, -1, 0, 0};
+    const int dy[4] = {0, 0, 1, -1};
+    int walkDir = -1;
+    for (int i = 0; i < 4; ++i) {
+        Point neighbor{pPos.x + dx[i], pPos.y + dy[i]};
+        if (engine.getMap().isWalkable(neighbor.x, neighbor.y)) {
+            walkDir = i;
+            break;
+        }
+    }
+    TEST_ASSERT(walkDir != -1, "Player must have an open adjacent walkable tile");
+
+    Point chestPos{pPos.x + dx[walkDir], pPos.y + dy[walkDir]};
+    Chest testChest;
+    testChest.id = 8833;
+    testChest.pos = chestPos;
+    testChest.locked = true;
+    testChest.opened = false;
+    testChest.goldReward = 50;
+
+    Item lootItem;
+    lootItem.id = 7711;
+    lootItem.name = "Enchanted Dagger";
+    lootItem.category = ItemCategory::Weapon;
+    lootItem.atkBonus = 4;
+    testChest.contents.push_back(lootItem);
+    engine.getChests().push_back(testChest);
+
+    // 1. Try to bump into chest WITHOUT key -> movement should be blocked
+    bool movedWithoutKey = engine.stepPlayer(dx[walkDir], dy[walkDir]);
+    TEST_ASSERT(!movedWithoutKey, "Bumping locked chest without key must fail / be blocked");
+    TEST_ASSERT(engine.getPlayer().pos == pPos, "Player position must not change when bumping locked chest without key");
+
+    // 2. Give player a Golden Key
+    Item goldenKey;
+    goldenKey.id = 5511;
+    goldenKey.name = "Golden Key";
+    goldenKey.category = ItemCategory::Key;
+    engine.getInventory().push_back(goldenKey);
+
+    int goldBefore = engine.getGold();
+
+    // 3. Bump into chest WITH key -> should unlock and open
+    bool openedWithKey = engine.stepPlayer(dx[walkDir], dy[walkDir]);
+    TEST_ASSERT(openedWithKey, "Bumping locked chest with key should succeed");
+    TEST_ASSERT(engine.getGold() == goldBefore + 50, "Gold reward (50) must be added to player gold");
+
+    // Check chest state in engine
+    bool chestOpened = false;
+    for (const auto& ch : engine.getChests()) {
+        if (ch.id == 8833) {
+            TEST_ASSERT(ch.opened, "Chest must be marked opened");
+            TEST_ASSERT(!ch.locked, "Chest must be marked unlocked");
+            chestOpened = true;
+            break;
+        }
+    }
+    TEST_ASSERT(chestOpened, "Test chest must be found in engine chests list");
+
+    // Key must be consumed, loot added to inventory
+    bool keyConsumed = true;
+    bool lootAdded = false;
+    for (const auto& it : engine.getInventory()) {
+        if (it.id == 5511) keyConsumed = false;
+        if (it.id == 7711) lootAdded = true;
+    }
+    TEST_ASSERT(keyConsumed, "Golden key must be consumed upon unlocking chest");
+    TEST_ASSERT(lootAdded, "Chest loot contents must be placed in inventory");
+
+    return true;
+}
+
+// 18. Gold collection and dynamic score calculation
+bool test_gold_collection_and_score() {
+    Engine engine;
+    engine.init(4040);
+
+    Point pPos = engine.getPlayer().pos;
+    const int dx[4] = {1, -1, 0, 0};
+    const int dy[4] = {0, 0, 1, -1};
+    int walkDir = -1;
+    for (int i = 0; i < 4; ++i) {
+        Point neighbor{pPos.x + dx[i], pPos.y + dy[i]};
+        if (engine.getMap().isWalkable(neighbor.x, neighbor.y)) {
+            walkDir = i;
+            break;
+        }
+    }
+    TEST_ASSERT(walkDir != -1, "Player must have an open adjacent walkable tile");
+
+    Point goldPos{pPos.x + dx[walkDir], pPos.y + dy[walkDir]};
+    Item goldCoins;
+    goldCoins.id = 6655;
+    goldCoins.name = "Gold Coins";
+    goldCoins.category = ItemCategory::Gold;
+    goldCoins.goldValue = 35;
+    goldCoins.pos = goldPos;
+    goldCoins.pickedUp = false;
+    engine.getItems().push_back(goldCoins);
+
+    int goldBefore = engine.getGold();
+    int scoreBefore = engine.calculateScore();
+    size_t invBefore = engine.getInventory().size();
+
+    // Step onto gold tile
+    bool moved = engine.stepPlayer(dx[walkDir], dy[walkDir]);
+    TEST_ASSERT(moved, "Stepping onto gold tile should succeed");
+    TEST_ASSERT(engine.getGold() == goldBefore + 35, "Player gold must increase by coin value (35)");
+    TEST_ASSERT(engine.getInventory().size() == invBefore, "Gold coins must not consume inventory slots");
+
+    int scoreAfter = engine.calculateScore();
+    TEST_ASSERT(scoreAfter > scoreBefore, "Score should increase when collecting gold");
+    TEST_ASSERT(scoreAfter >= 0, "Score calculation must remain non-negative");
+
+    return true;
+}
+
+// 19. 500-tick game simulation
 bool test_headless_simulation() {
     std::cout << "    Instantiating Engine and running 500-tick headless simulation...\n";
     Engine engine;
@@ -744,6 +1001,10 @@ int main() {
     RUN_TEST(test_skeleton_archer_ranged_ai);
     RUN_TEST(test_goblin_rogue_skirmisher_retreat);
     RUN_TEST(test_player_ranged_combat);
+    RUN_TEST(test_trap_mechanics);
+    RUN_TEST(test_search_action_reveals_trap);
+    RUN_TEST(test_chest_and_key_mechanics);
+    RUN_TEST(test_gold_collection_and_score);
     RUN_TEST(test_headless_simulation);
 
     std::cout << "========================================\n";

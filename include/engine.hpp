@@ -10,7 +10,9 @@ enum class ItemCategory {
     Weapon,
     Armor,
     Potion,
-    Scroll
+    Scroll,
+    Key,
+    Gold
 };
 
 struct Item {
@@ -23,8 +25,31 @@ struct Item {
     int healAmount{0};
     int atkBonus{0};
     int defBonus{0};
+    int goldValue{0};
     bool equipped{false};
     bool pickedUp{false};
+};
+
+enum class TrapType {
+    Spike,
+    Poison
+};
+
+struct Trap {
+    int id{0};
+    Point pos{0, 0};
+    TrapType type{TrapType::Spike};
+    bool revealed{false};
+    int damage{6};
+};
+
+struct Chest {
+    int id{0};
+    Point pos{0, 0};
+    bool locked{true};
+    bool opened{false};
+    std::vector<Item> contents;
+    int goldReward{30};
 };
 
 struct Entity {
@@ -65,6 +90,15 @@ public:
     void addMessage(const std::string& msg);
     void addExp(int amount);
     void checkItemPickup();
+    bool searchSurroundings();
+    int getGold() const { return m_gold; }
+    void addGold(int amount) { m_gold += amount; }
+    int calculateScore() const;
+
+    const std::vector<Trap>& getTraps() const { return m_traps; }
+    std::vector<Trap>& getTraps() { return m_traps; }
+    const std::vector<Chest>& getChests() const { return m_chests; }
+    std::vector<Chest>& getChests() { return m_chests; }
 
     // Inventory & Equipment
     bool useOrEquipItem(size_t index);
@@ -131,6 +165,8 @@ private:
     std::vector<Entity> m_monsters;
     std::vector<Item> m_items;
     std::vector<Item> m_inventory;
+    std::vector<Trap> m_traps;
+    std::vector<Chest> m_chests;
     Map m_map;
     FogOfWar m_fow;
 
@@ -144,6 +180,7 @@ private:
     int m_turnCount{0};
     int m_floor{1};
     int m_safeRestCount{0};
+    int m_gold{0};
     int m_playerLevel{1};
     int m_playerExp{0};
     int m_playerExpToNext{20};
@@ -156,6 +193,8 @@ private:
     void restoreConsole();
     void spawnMonsters(int count);
     void spawnItems(int count);
+    void spawnTraps(int count);
+    void spawnChests(int count);
     void handleKey(int ch);
     void handleSpecialKey(int code);
 };

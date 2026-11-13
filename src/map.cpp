@@ -317,3 +317,82 @@ std::vector<Point> Map::getItemSpawns(int count) const {
     size_t resultCount = std::min(static_cast<size_t>(count), candidates.size());
     return std::vector<Point>(candidates.begin(), candidates.begin() + resultCount);
 }
+
+std::vector<Point> Map::getTrapSpawns(int count) const {
+    if (count <= 0) {
+        return {};
+    }
+
+    auto monsterSpawns = getMonsterSpawns(15);
+    std::vector<Point> candidates;
+
+    for (const auto& room : m_rooms) {
+        for (int y = room.y; y < room.y + room.height; ++y) {
+            for (int x = room.x; x < room.x + room.width; ++x) {
+                Point p{x, y};
+                if (getTile(x, y) == TileType::Floor && p != m_playerSpawn && p != m_stairsDownPos) {
+                    bool collides = false;
+                    for (const auto& m : monsterSpawns) {
+                        if (p == m) {
+                            collides = true;
+                            break;
+                        }
+                    }
+                    if (!collides) {
+                        candidates.push_back(p);
+                    }
+                }
+            }
+        }
+    }
+
+    std::mt19937 rng(m_seed + 30013);
+    std::shuffle(candidates.begin(), candidates.end(), rng);
+
+    size_t resultCount = std::min(static_cast<size_t>(count), candidates.size());
+    return std::vector<Point>(candidates.begin(), candidates.begin() + resultCount);
+}
+
+std::vector<Point> Map::getChestSpawns(int count) const {
+    if (count <= 0) {
+        return {};
+    }
+
+    auto monsterSpawns = getMonsterSpawns(15);
+    auto trapSpawns = getTrapSpawns(8);
+    std::vector<Point> candidates;
+
+    for (const auto& room : m_rooms) {
+        for (int y = room.y; y < room.y + room.height; ++y) {
+            for (int x = room.x; x < room.x + room.width; ++x) {
+                Point p{x, y};
+                if (getTile(x, y) == TileType::Floor && p != m_playerSpawn && p != m_stairsDownPos) {
+                    bool occupied = false;
+                    for (const auto& m : monsterSpawns) {
+                        if (p == m) {
+                            occupied = true;
+                            break;
+                        }
+                    }
+                    if (!occupied) {
+                        for (const auto& t : trapSpawns) {
+                            if (p == t) {
+                                occupied = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (!occupied) {
+                        candidates.push_back(p);
+                    }
+                }
+            }
+        }
+    }
+
+    std::mt19937 rng(m_seed + 40009);
+    std::shuffle(candidates.begin(), candidates.end(), rng);
+
+    size_t resultCount = std::min(static_cast<size_t>(count), candidates.size());
+    return std::vector<Point>(candidates.begin(), candidates.begin() + resultCount);
+}

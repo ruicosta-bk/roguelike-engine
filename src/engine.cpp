@@ -39,6 +39,7 @@ void Engine::init(unsigned int seed) {
     m_playerLevel = 1;
     m_playerExp = 0;
     m_playerExpToNext = 20;
+    m_gold = 0;
     m_running = true;
     m_gameOver = false;
     m_victory = false;
@@ -47,6 +48,8 @@ void Engine::init(unsigned int seed) {
     m_targetCursor = {0, 0};
     m_messageLog.clear();
     m_inventory.clear();
+    m_traps.clear();
+    m_chests.clear();
 
     m_map.generate(m_seed);
     m_fow.init(m_map.getWidth(), m_map.getHeight());
@@ -64,6 +67,8 @@ void Engine::init(unsigned int seed) {
     addMessage("Welcome to the Dungeons of Doom! [WASD: Move, I: Inventory, Q: Quit]");
     spawnMonsters(6);
     spawnItems(6);
+    spawnTraps(3);
+    spawnChests(1);
     m_fow.computeFOV(m_map, m_player.pos, 8);
     checkItemPickup();
 }
@@ -190,20 +195,39 @@ void Engine::spawnItems(int count) {
             item.category = ItemCategory::Scroll;
             item.symbol = '?';
             item.colorCode = "\033[1;33m";
+        } else if (i == 3) {
+            // Guaranteed Key slot
+            item.name = "Golden Key";
+            item.category = ItemCategory::Key;
+            item.symbol = 'k';
+            item.colorCode = "\033[1;33m";
+        } else if (i == 4) {
+            // Guaranteed Gold slot
+            item.name = "Gold Coins";
+            item.category = ItemCategory::Gold;
+            item.symbol = '$';
+            item.colorCode = "\033[1;33m";
+            item.goldValue = 20 + static_cast<int>(rng() % 15);
         } else {
-            // Potions or additional equipment
-            if (roll < 55) {
+            // Potions, additional gold, or equipment
+            if (roll < 40) {
                 item.name = "Health Potion";
                 item.category = ItemCategory::Potion;
                 item.symbol = '!';
                 item.colorCode = "\033[1;35m";
                 item.healAmount = 15;
-            } else if (roll < 80) {
+            } else if (roll < 65) {
                 item.name = "Elixir";
                 item.category = ItemCategory::Potion;
                 item.symbol = '!';
                 item.colorCode = "\033[1;35m";
                 item.healAmount = 25;
+            } else if (roll < 85) {
+                item.name = "Gold Coins";
+                item.category = ItemCategory::Gold;
+                item.symbol = '$';
+                item.colorCode = "\033[1;33m";
+                item.goldValue = 15 + static_cast<int>(rng() % 20);
             } else {
                 item.name = (m_floor >= 2) ? "Iron Longsword" : "Dagger";
                 item.category = ItemCategory::Weapon;
@@ -213,6 +237,66 @@ void Engine::spawnItems(int count) {
             }
         }
         m_items.push_back(item);
+    }
+}
+
+void Engine::spawnTraps(int count) {
+    m_traps.clear();
+    auto spawnPoints = m_map.getTrapSpawns(count);
+    int idCounter = 1;
+    std::mt19937 rng(m_seed + static_cast<unsigned int>(m_floor) * 3000 + 41);
+
+    for (const auto& pt : spawnPoints) {
+        Trap trap;
+        trap.id = idCounter++;
+        trap.pos = pt;
+        trap.revealed = false;
+        trap.damage = 6;
+        trap.type = (rng() % 2 == 0) ? TrapType::Spike : TrapType::Poison;
+        m_traps.push_back(trap);
+    }
+}
+
+void Engine::spawnChests(int count) {
+    m_chests.clear();
+    auto spawnPoints = m_map.getChestSpawns(count);
+    int idCounter = 1;
+    std::mt19937 rng(m_seed + static_cast<unsigned int>(m_floor) * 4000 + 83);
+
+    for (const auto& pt : spawnPoints) {
+        Chest chest;
+        chest.id = idCounter++;
+        chest.pos = pt;
+        chest.locked = true;
+        chest.opened = false;
+        chest.goldReward = 30 + (m_floor - 1) * 10;
+
+        Item loot;
+        loot.id = 1000 + chest.id;
+        loot.pos = pt;
+        loot.pickedUp = false;
+        loot.equipped = false;
+        if (m_floor == 1) {
+            loot.name = "Health Potion";
+            loot.category = ItemCategory::Potion;
+            loot.symbol = '!';
+            loot.colorCode = "\033[1;35m";
+            loot.healAmount = 20;
+        } else if (m_floor == 2) {
+            loot.name = "Steel Broadsword";
+            loot.category = ItemCategory::Weapon;
+            loot.symbol = ')';
+            loot.colorCode = "\033[1;36m";
+            loot.atkBonus = 6;
+        } else {
+            loot.name = "Mithril Plate";
+            loot.category = ItemCategory::Armor;
+            loot.symbol = '[';
+            loot.colorCode = "\033[1;37m";
+            loot.defBonus = 7;
+        }
+        chest.contents.push_back(loot);
+        m_chests.push_back(chest);
     }
 }
 
@@ -279,6 +363,13 @@ void Engine::addExp(int amount) {
 void Engine::checkItemPickup() {
     for (auto& item : m_items) {
         if (!item.pickedUp && item.pos == m_player.pos) {
+            if (item.category == ItemCategory::Gold) {
+                item.pickedUp = true;
+                int val = item.goldValue > 0 ? item.goldValue : 20;
+                m_gold += val;
+                addMessage("You collected " + std::to_string(val) + " Gold coins!");
+                continue;
+            }
             if (m_inventory.size() < MAX_INVENTORY_CAPACITY) {
                 item.pickedUp = true;
                 m_inventory.push_back(item);
@@ -372,6 +463,11 @@ bool Engine::useOrEquipItem(size_t index) {
             m_inventorySelectedIndex = m_inventory.size() - 1;
         }
         return true;
+    }
+
+    if (item.category == ItemCategory::Key) {
+        addMessage("Golden Key is used automatically when opening locked chests.");
+        return false;
     }
 
     return false;
@@ -521,6 +617,56 @@ bool Engine::stepPlayer(int dx, int dy) {
         }
     }
 
+    // Chest interaction
+    for (auto& chest : m_chests) {
+        if (chest.pos == target && !chest.opened) {
+            // Find key in inventory
+            int keyIdx = -1;
+            for (size_t i = 0; i < m_inventory.size(); ++i) {
+                if (m_inventory[i].category == ItemCategory::Key) {
+                    keyIdx = static_cast<int>(i);
+                    break;
+                }
+            }
+            if (keyIdx != -1) {
+                m_inventory.erase(m_inventory.begin() + keyIdx);
+                if (m_inventorySelectedIndex >= m_inventory.size() && !m_inventory.empty()) {
+                    m_inventorySelectedIndex = m_inventory.size() - 1;
+                }
+                chest.locked = false;
+                chest.opened = true;
+                m_gold += chest.goldReward;
+
+                std::string contentsDesc;
+                for (auto& loot : chest.contents) {
+                    if (m_inventory.size() < MAX_INVENTORY_CAPACITY) {
+                        loot.pickedUp = true;
+                        loot.pos = m_player.pos;
+                        m_inventory.push_back(loot);
+                        if (!contentsDesc.empty()) contentsDesc += ", ";
+                        contentsDesc += loot.name;
+                    } else {
+                        loot.pickedUp = false;
+                        loot.pos = target;
+                        m_items.push_back(loot);
+                        if (!contentsDesc.empty()) contentsDesc += ", ";
+                        contentsDesc += loot.name + " (dropped to floor)";
+                    }
+                }
+                if (contentsDesc.empty()) contentsDesc = "Treasure";
+                addMessage("Unlocked and opened Treasure Chest! Found " + contentsDesc + " and " +
+                           std::to_string(chest.goldReward) + " Gold!");
+                updateMonsters();
+                m_turnCount++;
+                m_fow.computeFOV(m_map, m_player.pos, 8);
+                return true;
+            } else {
+                addMessage("The chest is locked. You need a Golden Key.");
+                return false;
+            }
+        }
+    }
+
     // Closed door interaction: open door on bump
     if (m_map.getTile(target.x, target.y) == TileType::DoorClosed) {
         m_map.setTile(target.x, target.y, TileType::DoorOpen);
@@ -535,6 +681,25 @@ bool Engine::stepPlayer(int dx, int dy) {
     if (m_map.isWalkable(target.x, target.y)) {
         m_player.pos = target;
         checkItemPickup();
+
+        // Check if player stepped on a trap
+        for (auto& trap : m_traps) {
+            if (trap.pos == target) {
+                trap.revealed = true;
+                m_player.hp -= trap.damage;
+                std::string trapName = (trap.type == TrapType::Spike) ? "Spike Trap" : "Poison Trap";
+                addMessage("CLICK! You triggered a " + trapName + " (-" + std::to_string(trap.damage) + " HP)!");
+                if (m_player.hp <= 0) {
+                    m_player.hp = 0;
+                    m_gameOver = true;
+                    m_running = false;
+                    addMessage("You were killed by a trap! GAME OVER.");
+                    m_fow.computeFOV(m_map, m_player.pos, 8);
+                    return true;
+                }
+                break;
+            }
+        }
 
         if (m_map.getTile(target.x, target.y) == TileType::StairsDown) {
             addMessage("You see stairs leading down here. Press '>' to descend.");
@@ -565,6 +730,8 @@ bool Engine::descendStairs() {
         m_player.hp = std::min(m_player.maxHp, m_player.hp + 8); // Descending heals some HP
         spawnMonsters(6 + m_floor);
         spawnItems(6);
+        spawnTraps(3);
+        spawnChests(1);
         m_fow.computeFOV(m_map, m_player.pos, 8);
         checkItemPickup();
         addMessage("You descended to Dungeon Floor " + std::to_string(m_floor) + "!");
@@ -659,8 +826,28 @@ void Engine::updateMonsters() {
                         break;
                     }
                 }
+                for (const auto& ch : m_chests) {
+                    if (ch.pos == nextPos && !ch.opened) {
+                        blocked = true;
+                        break;
+                    }
+                }
                 if (!blocked) {
                     monster.pos = nextPos;
+                    // Check if monster stepped on a trap
+                    for (auto& trap : m_traps) {
+                        if (trap.pos == nextPos) {
+                            trap.revealed = true;
+                            monster.hp -= trap.damage;
+                            std::string trapName = (trap.type == TrapType::Spike) ? "Spike Trap" : "Poison Trap";
+                            addMessage("CLICK! " + monster.name + " triggered a " + trapName + " (-" + std::to_string(trap.damage) + " HP)!");
+                            if (monster.hp <= 0) {
+                                monster.hp = 0;
+                                addMessage(monster.name + " was killed by a trap!");
+                            }
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -767,6 +954,44 @@ bool Engine::shootAt(Point target) {
     return shootAtTarget();
 }
 
+bool Engine::searchSurroundings() {
+    if (m_gameOver || m_victory) return false;
+
+    int found = 0;
+    std::mt19937 rng(m_seed + static_cast<unsigned int>(m_turnCount) * 31 + 19);
+
+    for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            if (dx == 0 && dy == 0) continue;
+            Point checkPos{m_player.pos.x + dx, m_player.pos.y + dy};
+            for (auto& trap : m_traps) {
+                if (trap.pos == checkPos && !trap.revealed) {
+                    if (rng() % 100 < 80) {
+                        trap.revealed = true;
+                        found++;
+                        std::string trapName = (trap.type == TrapType::Spike) ? "Spike Trap" : "Poison Trap";
+                        addMessage("You carefully search and reveal a hidden " + trapName + "!");
+                    }
+                }
+            }
+        }
+    }
+
+    if (found == 0) {
+        addMessage("You search carefully but find nothing hidden.");
+    }
+
+    updateMonsters();
+    m_turnCount++;
+    m_fow.computeFOV(m_map, m_player.pos, 8);
+    return found > 0;
+}
+
+int Engine::calculateScore() const {
+    int score = m_floor * 1000 + m_playerExp * 2 + m_gold * 5 + m_playerLevel * 200 - m_turnCount;
+    return std::max(0, score);
+}
+
 std::string Engine::renderToString() const {
     std::string out;
     out.reserve(80 * 25 * 4 + 2048);
@@ -817,6 +1042,28 @@ std::string Engine::renderToString() const {
                 }
                 if (itemDrawn) continue;
 
+                // Check chests on visible tile
+                bool chestDrawn = false;
+                for (const auto& ch : m_chests) {
+                    if (ch.pos.x == x && ch.pos.y == y) {
+                        out += ch.opened ? "\033[0;33mc" : "\033[1;33mC";
+                        chestDrawn = true;
+                        break;
+                    }
+                }
+                if (chestDrawn) continue;
+
+                // Check revealed traps on visible tile
+                bool trapDrawn = false;
+                for (const auto& tr : m_traps) {
+                    if (tr.pos.x == x && tr.pos.y == y && tr.revealed) {
+                        out += "\033[1;31m^";
+                        trapDrawn = true;
+                        break;
+                    }
+                }
+                if (trapDrawn) continue;
+
                 TileType t = m_map.getTile(x, y);
                 switch (t) {
                     case TileType::Wall:
@@ -837,6 +1084,26 @@ std::string Engine::renderToString() const {
                 }
             } else if (explored) {
                 out += "\033[90m"; // Dim grey
+                bool chestDrawn = false;
+                for (const auto& ch : m_chests) {
+                    if (ch.pos.x == x && ch.pos.y == y) {
+                        out += ch.opened ? 'c' : 'C';
+                        chestDrawn = true;
+                        break;
+                    }
+                }
+                if (chestDrawn) continue;
+
+                bool trapDrawn = false;
+                for (const auto& tr : m_traps) {
+                    if (tr.pos.x == x && tr.pos.y == y && tr.revealed) {
+                        out += '^';
+                        trapDrawn = true;
+                        break;
+                    }
+                }
+                if (trapDrawn) continue;
+
                 TileType t = m_map.getTile(x, y);
                 switch (t) {
                     case TileType::Wall:
@@ -865,11 +1132,12 @@ std::string Engine::renderToString() const {
     // HUD Divider
     out += "\033[1;34m" + std::string(static_cast<size_t>(width), '=') + "\033[0m\n";
 
-    // HUD Line 1: Floor, Turn, Level, EXP
+    // HUD Line 1: Floor, Turn, Level, EXP, Gold, Score
     out += " Floor: \033[1;36m" + std::to_string(m_floor) + "\033[0m | ";
     out += "Turn: \033[1;36m" + std::to_string(m_turnCount) + "\033[0m | ";
     out += "Level: \033[1;32m" + std::to_string(m_playerLevel) + "\033[0m | ";
-    out += "EXP: \033[1;33m" + std::to_string(m_playerExp) + "/" + std::to_string(m_playerExpToNext) + "\033[0m\033[K\n";
+    out += "Gold: \033[1;33m" + std::to_string(m_gold) + "\033[0m | ";
+    out += "Score: \033[1;35m" + std::to_string(calculateScore()) + "\033[0m\033[K\n";
 
     // HUD Line 2: HP Bar, Atk (with weapon bonus), Def (with armor bonus)
     int barWidth = 16;
@@ -898,15 +1166,15 @@ std::string Engine::renderToString() const {
 
     // Status / Controls
     if (m_gameOver) {
-        out += " \033[1;31m*** GAME OVER - Press [R] to Restart, [Q] to Quit ***\033[0m\033[K\n";
+        out += " \033[1;31m*** GAME OVER (Score: " + std::to_string(calculateScore()) + ", Gold: " + std::to_string(m_gold) + ") - Press [R] to Restart, [Q] to Quit ***\033[0m\033[K\n";
     } else if (m_victory) {
-        out += " \033[1;32m*** VICTORY! Dungeon Cleared! Press [R] to Restart, [Q] to Quit ***\033[0m\033[K\n";
+        out += " \033[1;32m*** VICTORY! (Score: " + std::to_string(calculateScore()) + ", Gold: " + std::to_string(m_gold) + ") - Press [R] to Restart, [Q] to Quit ***\033[0m\033[K\n";
     } else if (m_targetingMode) {
         out += " \033[1;36m*** TARGETING MODE *** [WASD] Aim | [Enter/Space/F] Shoot | [ESC] Cancel\033[0m\033[K\n";
     } else if (m_inventoryOpen) {
         out += " \033[1;33m*** INVENTORY OPEN *** [W/S] Select | [Enter/Space] Use | [D] Drop | [I] Close\033[0m\033[K\n";
     } else {
-        out += " \033[90mControls: [WASD] Move | [F] Shoot | [I] Inventory | [.] Rest | [>] Stairs | [R] Restart | [Q] Quit\033[0m\033[K\n";
+        out += " \033[90mControls: [WASD] Move | [F] Shoot | [Z] Search | [I] Inventory | [.] Rest | [>] Stairs | [R] Restart | [Q] Quit\033[0m\033[K\n";
     }
 
     // Modal or Combat Log
@@ -923,6 +1191,8 @@ std::string Engine::renderToString() const {
                 else if (item.category == ItemCategory::Armor) bonus = " (+ " + std::to_string(item.defBonus) + " Def)";
                 else if (item.category == ItemCategory::Potion) bonus = " (Heal " + std::to_string(item.healAmount) + " HP)";
                 else if (item.category == ItemCategory::Scroll) bonus = " (Teleport)";
+                else if (item.category == ItemCategory::Key) bonus = " (Unlocks Chests)";
+                else if (item.category == ItemCategory::Gold) bonus = " (" + std::to_string(item.goldValue) + " Gold)";
 
                 std::string col = isSelected ? "\033[1;37m" : "\033[0;37m";
                 out += prefix + col + "[" + std::to_string(i + 1) + "] " + item.name + bonus + tag + "\033[0m\033[K\n";
@@ -1067,6 +1337,10 @@ void Engine::handleKey(int ch) {
         case 'f':
         case 'F':
             toggleTargetingMode();
+            break;
+        case 'z':
+        case 'Z':
+            searchSurroundings();
             break;
         case 'w':
         case 'W':
@@ -1264,22 +1538,51 @@ void Engine::runHeadless(int maxTicks, unsigned int seed) {
         }
         if (acted) continue;
 
-        // 3. If there is an item nearby on the floor, step towards it to pick it up
-        if (m_inventory.size() < MAX_INVENTORY_CAPACITY) {
-            for (const auto& item : m_items) {
-                if (!item.pickedUp) {
-                    auto path = Pathfinding::findPath(m_map, m_player.pos, item.pos);
-                    if (!path.empty()) {
-                        Point step = path[0];
-                        if (stepPlayer(step.x - m_player.pos.x, step.y - m_player.pos.y)) {
-                            acted = true;
-                            break;
+        // 2c. If player has a key, unlock adjacent unopened chest or pathfind to it
+        bool hasKey = false;
+        for (const auto& it : m_inventory) {
+            if (it.category == ItemCategory::Key) {
+                hasKey = true;
+                break;
+            }
+        }
+        if (hasKey) {
+            for (const auto& ch : m_chests) {
+                if (!ch.opened) {
+                    int d = std::abs(ch.pos.x - m_player.pos.x) + std::abs(ch.pos.y - m_player.pos.y);
+                    if (d == 1) {
+                        stepPlayer(ch.pos.x - m_player.pos.x, ch.pos.y - m_player.pos.y);
+                        acted = true;
+                        break;
+                    } else {
+                        auto path = Pathfinding::findPath(m_map, m_player.pos, ch.pos);
+                        if (!path.empty()) {
+                            Point step = path[0];
+                            if (stepPlayer(step.x - m_player.pos.x, step.y - m_player.pos.y)) {
+                                acted = true;
+                                break;
+                            }
                         }
                     }
                 }
             }
             if (acted) continue;
         }
+
+        // 3. If there is an item nearby on the floor, step towards it to pick it up
+        for (const auto& item : m_items) {
+            if (!item.pickedUp && (m_inventory.size() < MAX_INVENTORY_CAPACITY || item.category == ItemCategory::Gold)) {
+                auto path = Pathfinding::findPath(m_map, m_player.pos, item.pos);
+                if (!path.empty()) {
+                    Point step = path[0];
+                    if (stepPlayer(step.x - m_player.pos.x, step.y - m_player.pos.y)) {
+                        acted = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if (acted) continue;
 
         // 4. Pathfind towards stairs
         if (stairs.x != -1) {
@@ -1516,6 +1819,10 @@ static LRESULT CALLBACK GuiWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                         engine->toggleTargetingMode();
                         handled = true;
                         break;
+                    case 'Z':
+                        engine->searchSurroundings();
+                        handled = true;
+                        break;
                     case 'W':
                     case VK_UP:
                         engine->stepPlayer(0, -1);
@@ -1655,6 +1962,9 @@ static LRESULT CALLBACK GuiWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                     handled = true;
                 } else if (wParam == 'f' || wParam == 'F') {
                     engine->toggleTargetingMode();
+                    handled = true;
+                } else if (wParam == 'z' || wParam == 'Z') {
+                    engine->searchSurroundings();
                     handled = true;
                 } else if (wParam == 'q' || wParam == 'Q') {
                     DestroyWindow(hwnd);
@@ -1859,6 +2169,71 @@ void Engine::renderGui(void* hdcVoid, int width, int height) {
         }
     }
 
+    // 2b. Render Traps
+    for (const auto& tr : m_traps) {
+        if (!tr.revealed) continue;
+        bool visible = m_fow.isVisible(tr.pos.x, tr.pos.y);
+        bool explored = m_fow.isExplored(tr.pos.x, tr.pos.y);
+        if (!visible && !explored) continue;
+
+        int tx = tr.pos.x * TILE_SIZE;
+        int ty = tr.pos.y * TILE_SIZE;
+
+        COLORREF trapCol = visible ? RGB(220, 70, 70) : RGB(100, 40, 40);
+        HPEN hpenTrap = CreatePen(PS_SOLID, 1, trapCol);
+        HBRUSH hbrTrap = CreateSolidBrush(trapCol);
+        HPEN oldP = static_cast<HPEN>(SelectObject(memDC, hpenTrap));
+        HBRUSH oldB = static_cast<HBRUSH>(SelectObject(memDC, hbrTrap));
+
+        POINT pts1[3] = { {tx + 2, ty + 12}, {tx + 5, ty + 4}, {tx + 7, ty + 12} };
+        Polygon(memDC, pts1, 3);
+        POINT pts2[3] = { {tx + 7, ty + 12}, {tx + 10, ty + 4}, {tx + 12, ty + 12} };
+        Polygon(memDC, pts2, 3);
+
+        SelectObject(memDC, oldB);
+        SelectObject(memDC, oldP);
+        DeleteObject(hpenTrap);
+        DeleteObject(hbrTrap);
+    }
+
+    // 2c. Render Chests
+    HBRUSH hbrChestWood = CreateSolidBrush(RGB(140, 80, 30));
+    HBRUSH hbrChestWoodDim = CreateSolidBrush(RGB(65, 38, 15));
+    HPEN hpenChestIron = CreatePen(PS_SOLID, 1, RGB(50, 50, 60));
+    HBRUSH hbrGoldLock = CreateSolidBrush(RGB(255, 215, 0));
+
+    for (const auto& ch : m_chests) {
+        bool visible = m_fow.isVisible(ch.pos.x, ch.pos.y);
+        bool explored = m_fow.isExplored(ch.pos.x, ch.pos.y);
+        if (!visible && !explored) continue;
+
+        int cx = ch.pos.x * TILE_SIZE;
+        int cy = ch.pos.y * TILE_SIZE;
+
+        RECT rBox = { cx + 2, cy + 3, cx + TILE_SIZE - 2, cy + TILE_SIZE - 2 };
+        FillRect(memDC, &rBox, visible ? hbrChestWood : hbrChestWoodDim);
+
+        HPEN oldP = static_cast<HPEN>(SelectObject(memDC, hpenChestIron));
+        FrameRect(memDC, &rBox, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+
+        if (!ch.opened) {
+            MoveToEx(memDC, cx + 2, cy + 7, NULL);
+            LineTo(memDC, cx + TILE_SIZE - 2, cy + 7);
+            if (visible) {
+                RECT rLock = { cx + 5, cy + 6, cx + 9, cy + 10 };
+                FillRect(memDC, &rLock, hbrGoldLock);
+            }
+        } else {
+            MoveToEx(memDC, cx + 2, cy + 3, NULL);
+            LineTo(memDC, cx + TILE_SIZE - 4, cy + 1);
+        }
+        SelectObject(memDC, oldP);
+    }
+    DeleteObject(hbrChestWood);
+    DeleteObject(hbrChestWoodDim);
+    DeleteObject(hpenChestIron);
+    DeleteObject(hbrGoldLock);
+
     // 3. Render Floor Items
     HBRUSH hbrPotion = CreateSolidBrush(RGB(220, 40, 130));
     HBRUSH hbrWeapon = CreateSolidBrush(RGB(80, 200, 240));
@@ -1885,6 +2260,12 @@ void Engine::renderGui(void* hdcVoid, int width, int height) {
             } else if (item.category == ItemCategory::Scroll) {
                 itemBrush = hbrScroll;
                 itemTxtColor = RGB(50, 40, 10);
+            } else if (item.category == ItemCategory::Gold) {
+                itemBrush = hbrGold;
+                itemTxtColor = RGB(40, 30, 0);
+            } else if (item.category == ItemCategory::Key) {
+                itemBrush = hbrGold;
+                itemTxtColor = RGB(30, 20, 0);
             }
 
             HPEN oldPen = static_cast<HPEN>(SelectObject(memDC, hpenNull));
@@ -2061,7 +2442,9 @@ void Engine::renderGui(void* hdcVoid, int width, int height) {
     SetTextColor(memDC, RGB(100, 220, 255));
     std::string s1 = "Floor: " + std::to_string(m_floor) +
                      "   |   Turn: " + std::to_string(m_turnCount) +
-                     "   |   Level: " + std::to_string(m_playerLevel);
+                     "   |   Level: " + std::to_string(m_playerLevel) +
+                     "   |   Gold: " + std::to_string(m_gold) +
+                     "   |   Score: " + std::to_string(calculateScore());
     TextOutA(memDC, 20, hudY + 12, s1.c_str(), static_cast<int>(s1.size()));
 
     // EXP Bar
@@ -2111,7 +2494,7 @@ void Engine::renderGui(void* hdcVoid, int width, int height) {
 
     // Controls Hints
     SetTextColor(memDC, RGB(140, 150, 165));
-    std::string c1 = "[WASD / Arrows] Move & Attack   |   [F] Shoot   |   [I] Inventory (" +
+    std::string c1 = "[WASD / Arrows] Move & Attack   |   [F] Shoot   |   [Z] Search   |   [I] Inventory (" +
                      std::to_string(m_inventory.size()) + "/10)   |   [Space / .] Rest";
     TextOutA(memDC, 20, hudY + 112, c1.c_str(), static_cast<int>(c1.size()));
 
@@ -2201,6 +2584,10 @@ void Engine::renderGui(void* hdcVoid, int width, int height) {
                     itemLine += "  (Heals +" + std::to_string(it.healAmount) + " HP)";
                 } else if (it.category == ItemCategory::Scroll) {
                     itemLine += "  (Teleports to Safe Tile)";
+                } else if (it.category == ItemCategory::Key) {
+                    itemLine += "  (Unlocks Chests)";
+                } else if (it.category == ItemCategory::Gold) {
+                    itemLine += "  (" + std::to_string(it.goldValue) + " Gold)";
                 }
 
                 if (it.equipped) {
@@ -2254,8 +2641,8 @@ void Engine::renderGui(void* hdcVoid, int width, int height) {
         SelectObject(memDC, hFontRegular);
         SetTextColor(memDC, RGB(240, 240, 240));
         std::string subtext = m_gameOver ?
-            "You have fallen! Press [R] to Restart or [Q] to Quit." :
-            "You retrieved the Amulet and escaped! Press [R] to Restart.";
+            ("You have fallen! Final Score: " + std::to_string(calculateScore()) + ", Gold: " + std::to_string(m_gold) + ". Press [R] Restart.") :
+            ("You escaped! Final Score: " + std::to_string(calculateScore()) + ", Gold: " + std::to_string(m_gold) + ". Press [R] Restart.");
         RECT rSub = { bannerX + 10, bannerY + 62, bannerX + bannerW - 10, bannerY + 95 };
         DrawTextA(memDC, subtext.c_str(), static_cast<int>(subtext.size()), &rSub, DT_CENTER | DT_SINGLELINE);
 
